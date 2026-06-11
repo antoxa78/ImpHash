@@ -1,0 +1,22 @@
+[package]
+name = "imphash"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gtk4 = { version = "0.9", features = ["v4_14"] }
+libadwaita = { version = "0.7", features = ["v1_6"] }
+gdk-pixbuf = "0.20"
+glib = "0.20"
+image = "0.25.10"
+walkdir = "2"
+rayon = "1"
+anyhow = "1"
+trash = "5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+pdq-rs = { version = "1.0", optional = true }
+
+[features]
+default = []
+pdq = ["dep:pdq-rs"]

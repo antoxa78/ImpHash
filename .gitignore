@@ -1,0 +1,106 @@
+# Rust target directory
+/target/
+
+# Editor temporary files
+.vscode
+*.swp
+*.swo
+*~.
+
+# IDE files
+.idea/
+.vscode/
+*.code-workspace
+
+# Build artifacts
+*.o
+*.so
+*.dylib
+*.dll
+
+# Package manager cache
+Cargo.toml.normal
+Cargo.lock*
+
+# OS
+.DS_Store
+
+# Temporary files
+*.tmp
+*.temp
+
+# Visual Studio Code extensions
+*.vs
+
+# Log files
+*.log
+
+# Coverage reports
+*.profraw
+*.prof
+
+cargo-data/
+
+# macOS
+.DS_Store
+.LSOverride
+
+# Windows
+Thumbs.db
+Thumbs.db:digi
+
+# Python environment
+.venv
+__pycache__/
+*.pyc
+
+# Node.js
+node_modules/
+*.log
+
+# Go dependencies
+vendor/
+
+# Terraform
+.terraform*
+*.tfstate*
+
+# Golang
+bin/
+
+debug/
+
+# Java
+*.class
+*.jar
+*.war
+*.ear
+
+# C++
+*.out
+
+# Julia
+*.jl
+*.so
+
+# Git merge/conflict resolution
+*.orig
+
+# Compiled Dynamic Libraries
+*.so
+*.lo
+*.o
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Documentation
+*.rst
+*.md
+
+# Test data
+test*.txt
+
+# Everything in the root directory is public
