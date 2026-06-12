@@ -2531,6 +2531,9 @@ fn show_group_preview(
         entries.iter().map(|(p, _)| p.clone()).collect()
     );
 
+    let monitors: std::rc::Rc<std::cell::RefCell<Vec<gtk4::gio::FileMonitor>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+
     for (entry_idx, (path, is_ref)) in entries.iter().enumerate() {
         let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
         row.set_css_classes(&["card"]);
@@ -2598,10 +2601,33 @@ fn show_group_preview(
         zoom_btn.set_margin_top(4);
         let zoom_paths = group_paths.clone();
         let zoom_idx = entry_idx;
+        let mw_zoom = main_widgets.clone();
+        let sl_zoom = status_label.clone();
+        let zoom_clicked_path = path.clone();
         zoom_btn.connect_clicked(move |btn| {
             if let Some(root) = btn.root() {
                 if let Some(parent_win) = root.downcast_ref::<gtk4::Window>() {
-                    show_zoom_window(parent_win, &zoom_paths, zoom_idx);
+                    let is_available = |p: &String| -> bool {
+                        mw_zoom.get(p).map_or(true, |mw| {
+                            !mw.deleted_label.is_visible() && !mw.moved_label.is_visible()
+                        })
+                    };
+                    if !is_available(&zoom_clicked_path) {
+                        sl_zoom.set_text("Cannot zoom: file was moved to trash");
+                        return;
+                    }
+                    let filtered: Vec<String> = zoom_paths.iter()
+                        .filter(|p| is_available(p))
+                        .cloned()
+                        .collect();
+                    if filtered.is_empty() {
+                        return;
+                    }
+                    let new_idx = zoom_paths[..zoom_idx].iter()
+                        .filter(|p| is_available(p))
+                        .count();
+                    let new_idx = new_idx.min(filtered.len() - 1);
+                    show_zoom_window(parent_win, &std::rc::Rc::new(filtered), new_idx);
                 }
             }
         });
@@ -2949,6 +2975,50 @@ fn show_group_preview(
                 }
             }
         }
+
+        // Monitor file for external deletion
+        let path_mon = path.clone();
+        let pic_mon = picture.clone();
+        let ov_mon = status_overlay_box.clone();
+        let icon_mon = status_icon.clone();
+        let lbl_mon = status_overlay_label.clone();
+        let move_btn_mon = move_btn.clone();
+        let trash_btn_mon = trash_btn.clone();
+        let zoom_btn_mon = zoom_btn.clone();
+        let mw_mon = main_widgets.clone();
+        let path_mw_mon = path.clone();
+        let mons = monitors.clone();
+        let file = gtk4::gio::File::for_path(&path_mon);
+        if let Ok(monitor) = file.monitor_file(gtk4::gio::FileMonitorFlags::WATCH_MOVES, None::<&gtk4::gio::Cancellable>) {
+            monitor.connect_changed(move |_mon, _file, _other, event| {
+                if !ov_mon.is_visible() && matches!(event,
+                    gtk4::gio::FileMonitorEvent::Deleted
+                    | gtk4::gio::FileMonitorEvent::Renamed
+                    | gtk4::gio::FileMonitorEvent::MovedOut
+                ) {
+                    pic_mon.set_visible(false);
+                    icon_mon.set_icon_name(Some("image-missing-symbolic"));
+                    lbl_mon.set_text("File not found");
+                    ov_mon.set_visible(true);
+                    move_btn_mon.set_visible(false);
+                    trash_btn_mon.set_visible(false);
+                    zoom_btn_mon.set_sensitive(false);
+                    // Sync main window
+                    if let Some(w) = mw_mon.get(&path_mw_mon) {
+                        w.deleted_label.set_text("File not found");
+                        w.deleted_label.set_visible(true);
+                        w.trash_btn.set_visible(false);
+                        w.move_btn.set_visible(false);
+                        if w.reference {
+                            w.row.set_css_classes(&["deleted", "ref-row"]);
+                        } else {
+                            w.row.set_css_classes(&["deleted"]);
+                        }
+                    }
+                }
+            });
+            mons.borrow_mut().push(monitor);
+        }
     }
 
     main_box.append(&status_label);
@@ -2966,15 +3036,51 @@ fn show_group_preview(
         glib::Propagation::Proceed
     });
 
+    // Re-check file existence when window regains focus (catches external deletions
+    // that the FileMonitor may miss, e.g. trash-via-GIO from some image viewers)
+    let focus_paths: Vec<String> = entries.iter().map(|(p,_)| p.clone()).collect();
+    let pw_focus = preview_widgets.clone();
+    let mw_focus = main_widgets.clone();
+    window.connect_is_active_notify(move |_win| {
+        let map = pw_focus.lock().unwrap();
+        for path in &focus_paths {
+            let exists = std::path::Path::new(path).exists();
+            if !exists {
+                if let Some(pw) = map.get(path) {
+                    if !pw.status_overlay_box.is_visible() {
+                        pw.picture.set_visible(false);
+                        pw.status_icon.set_icon_name(Some("image-missing-symbolic"));
+                        pw.status_overlay_label.set_text("File not found");
+                        pw.status_overlay_box.set_visible(true);
+                        pw.move_btn.set_visible(false);
+                        pw.trash_btn.set_visible(false);
+                    }
+                }
+                if let Some(w) = mw_focus.get(path) {
+                    if !w.deleted_label.is_visible() && !w.moved_label.is_visible() {
+                        w.deleted_label.set_text("File not found");
+                        w.deleted_label.set_visible(true);
+                        w.trash_btn.set_visible(false);
+                        w.move_btn.set_visible(false);
+                        if w.reference {
+                            w.row.set_css_classes(&["deleted", "ref-row"]);
+                        } else {
+                            w.row.set_css_classes(&["deleted"]);
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     window.present();
 }
 
 fn show_zoom_window(parent: &gtk4::Window, paths: &std::rc::Rc<Vec<String>>, start_index: usize) {
     let window = gtk4::Window::new();
     window.set_transient_for(Some(parent));
-    window.set_modal(true);
     window.set_default_size(1200, 900);
-    window.maximize();
+    window.fullscreen();
 
     let current_index = std::rc::Rc::new(std::cell::Cell::new(start_index));
     let paths = paths.clone();
