@@ -2996,23 +2996,14 @@ fn show_zoom_window(parent: &gtk4::Window, paths: &std::rc::Rc<Vec<String>>, sta
     scrolled.set_child(Some(&picture));
     overlay.set_child(Some(&scrolled));
 
-    // Bottom bar: two rows — metadata info on top, controls below
-    let bottom_bar = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    // Bottom bar: prev | counter | path | open | next
+    let bottom_bar = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
     bottom_bar.set_halign(gtk4::Align::Fill);
     bottom_bar.set_valign(gtk4::Align::End);
     bottom_bar.set_margin_bottom(12);
     bottom_bar.set_margin_start(24);
     bottom_bar.set_margin_end(24);
     bottom_bar.set_css_classes(&["toolbar", "osd"]);
-
-    // Top row: image metadata
-    let meta_label = gtk4::Label::new(None);
-    meta_label.set_halign(gtk4::Align::Center);
-    meta_label.set_wrap(true);
-    meta_label.set_justify(gtk4::Justification::Center);
-
-    // Bottom row: navigation controls
-    let controls_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
 
     let prev_btn = btn_icon_text("Previous", "go-previous-symbolic");
     prev_btn.set_css_classes(&["small"]);
@@ -3033,14 +3024,11 @@ fn show_zoom_window(parent: &gtk4::Window, paths: &std::rc::Rc<Vec<String>>, sta
     let next_btn = btn_icon_text("Next", "go-next-symbolic");
     next_btn.set_css_classes(&["small"]);
 
-    controls_row.append(&prev_btn);
-    controls_row.append(&counter_label);
-    controls_row.append(&path_label);
-    controls_row.append(&open_btn);
-    controls_row.append(&next_btn);
-
-    bottom_bar.append(&meta_label);
-    bottom_bar.append(&controls_row);
+    bottom_bar.append(&prev_btn);
+    bottom_bar.append(&counter_label);
+    bottom_bar.append(&path_label);
+    bottom_bar.append(&open_btn);
+    bottom_bar.append(&next_btn);
     overlay.add_overlay(&bottom_bar);
 
     window.set_child(Some(&overlay));
@@ -3050,7 +3038,6 @@ fn show_zoom_window(parent: &gtk4::Window, paths: &std::rc::Rc<Vec<String>>, sta
         let picture = picture.clone();
         let path_label = path_label.clone();
         let counter_label = counter_label.clone();
-        let meta_label = meta_label.clone();
         let prev_btn = prev_btn.clone();
         let next_btn = next_btn.clone();
         let window = window.clone();
@@ -3067,21 +3054,6 @@ fn show_zoom_window(parent: &gtk4::Window, paths: &std::rc::Rc<Vec<String>>, sta
             if let Ok(pixbuf) = gdk_pixbuf::Pixbuf::from_file(path) {
                 picture.set_paintable(Some(&gtk4::gdk::Texture::for_pixbuf(&pixbuf)));
             }
-            // Update metadata
-            let mut meta_parts: Vec<String> = Vec::new();
-            if let Some(d) = read_exif_date(path) {
-                meta_parts.push(d);
-            }
-            if let Some(m) = read_exif_model(path) {
-                meta_parts.push(m);
-            }
-            if let Ok((w, h)) = image::image_dimensions(std::path::Path::new(path)) {
-                meta_parts.push(format!("{}×{}", w, h));
-            }
-            if let Ok(m) = std::fs::metadata(path) {
-                meta_parts.push(preview::format_size(m.len()));
-            }
-            meta_label.set_text(&meta_parts.join("  ·  "));
             // Update labels
             path_label.set_text(path);
             counter_label.set_text(&format!("{} / {}", idx + 1, total));
