@@ -2513,6 +2513,28 @@ fn show_group_preview(
             trash_btn: trash_btn.clone(),
             move_btn: move_btn.clone(),
         });
+
+        // Sync preview state with main window for already-trashed/moved files
+        if let Some(mw) = main_widgets.get(path) {
+            if mw.deleted_label.is_visible() {
+                picture.set_visible(false);
+                status_icon.set_icon_name(Some("user-trash-symbolic"));
+                status_overlay_label.set_text("Moved to trash");
+                status_overlay_box.set_visible(true);
+                trash_btn.set_visible(false);
+            } else if mw.moved_label.is_visible() {
+                let dest = mw.moved_label.text().to_string();
+                let dest = dest.strip_prefix("→ Moved to ").unwrap_or(&dest).to_string();
+                picture.set_visible(false);
+                status_icon.set_icon_name(Some("go-jump-symbolic"));
+                status_overlay_label.set_text("Moved to:");
+                moved_to_label.set_text(&dest);
+                moved_to_label.set_visible(true);
+                status_overlay_box.set_visible(true);
+                path_label.set_text(&dest);
+                move_btn.set_visible(false);
+            }
+        }
     }
 
     main_box.append(&status_label);
