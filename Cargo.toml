@@ -4,8 +4,8 @@ version = "1.1.0"
 edition = "2021"
 
 [dependencies]
-gtk4 = { version = "0.9", features = ["v4_14"] }
-libadwaita = { version = "0.7", features = ["v1_6"] }
+gtk4 = { version = "0.9", features = ["v4_12"] }
+libadwaita = { version = "0.7", features = ["v1_5"] }
 gdk-pixbuf = "0.20"
 glib = "0.20"
 image = "0.25.10"
