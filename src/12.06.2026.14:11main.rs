@@ -2414,6 +2414,7 @@ fn show_group_preview(
     group_number: usize,
 ) {
     let window = gtk4::Window::new();
+    window.set_title(Some(&format!("ImpHash — Group #{} Preview", group_number)));
     window.set_default_size(900, 700);
     window.maximize();
 
@@ -2461,71 +2462,11 @@ fn show_group_preview(
     main_box.set_margin_end(12);
 
     let n = entries.len();
-    let total_groups = results_data.lock().unwrap().len();
-    window.set_title(Some(&format!("ImpHash — Group #{} of {} Preview", group_number, total_groups)));
-
-    let nav_bar = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
-    nav_bar.set_margin_bottom(4);
-
-    let prev_btn = btn_icon_text("Previous Group", "go-previous-symbolic");
-    prev_btn.set_sensitive(group_number > 1);
-    prev_btn.set_tooltip_text(Some("View the previous duplicate group"));
-
-    let title = gtk4::Label::new(Some(&format!(
-        "Group #{} of {} — {} image{}", group_number, total_groups, n, if n == 1 { "" } else { "s" }
-    )));
+    let title = gtk4::Label::new(Some(&format!("Group #{} — Previewing {} image{}", group_number, n, if n == 1 { "" } else { "s" })));
     title.set_css_classes(&["heading"]);
-    title.set_hexpand(true);
-    title.set_halign(gtk4::Align::Center);
-
-    let next_btn = btn_icon_text("Next Group", "go-next-symbolic");
-    next_btn.set_sensitive(group_number < total_groups);
-    next_btn.set_tooltip_text(Some("View the next duplicate group"));
-
-    {
-        let rd = results_data.clone();
-        let pw = preview_widgets.clone();
-        let win = window.clone();
-        prev_btn.connect_clicked(move |_| {
-            let target = group_number - 1;
-            let entries: Vec<(String, bool)> = {
-                let data = rd.lock().unwrap();
-                match data.get(target - 1) {
-                    Some(gd) => gd.files.iter()
-                        .map(|fd| (fd.path.clone(), fd.reference))
-                        .collect(),
-                    None => return,
-                }
-            };
-            show_group_preview(&entries, &rd, &pw, target);
-            win.close();
-        });
-    }
-
-    {
-        let rd = results_data.clone();
-        let pw = preview_widgets.clone();
-        let win = window.clone();
-        next_btn.connect_clicked(move |_| {
-            let target = group_number + 1;
-            let entries: Vec<(String, bool)> = {
-                let data = rd.lock().unwrap();
-                match data.get(target - 1) {
-                    Some(gd) => gd.files.iter()
-                        .map(|fd| (fd.path.clone(), fd.reference))
-                        .collect(),
-                    None => return,
-                }
-            };
-            show_group_preview(&entries, &rd, &pw, target);
-            win.close();
-        });
-    }
-
-    nav_bar.append(&prev_btn);
-    nav_bar.append(&title);
-    nav_bar.append(&next_btn);
-    main_box.append(&nav_bar);
+    title.set_halign(gtk4::Align::Start);
+    title.set_margin_bottom(4);
+    main_box.append(&title);
 
     for (path, is_ref) in entries {
         let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
@@ -2785,10 +2726,6 @@ fn show_group_preview(
             match trash::os_limited::restore_all(to_restore) {
                 Ok(()) => {
                     sl_restore.set_text(&format!("Restored: {}", rp));
-                    // Reload thumbnail (may not have been loaded if file was trashed)
-                    if let Some(pixbuf) = load_pixbuf_scaled(&rp, 1200) {
-                        pic_restore.set_paintable(Some(&gtk4::gdk::Texture::for_pixbuf(&pixbuf)));
-                    }
                     // Switch back to thumbnail
                     pic_restore.set_visible(true);
                     icon_restore.set_icon_name(Some(""));
@@ -2842,10 +2779,6 @@ fn show_group_preview(
                 || (std::fs::copy(&dest, &rmb_path).is_ok() && std::fs::remove_file(&dest).is_ok())
             {
                 rmb_sl.set_text(&format!("Restored to: {}", rmb_path));
-                // Reload thumbnail (may not have been loaded if file was moved)
-                if let Some(pixbuf) = load_pixbuf_scaled(&rmb_path, 1200) {
-                    rmb_pic.set_paintable(Some(&gtk4::gdk::Texture::for_pixbuf(&pixbuf)));
-                }
                 // Switch back to thumbnail
                 rmb_pic.set_visible(true);
                 rmb_icon.set_icon_name(Some(""));
