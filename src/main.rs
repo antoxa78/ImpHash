@@ -10,7 +10,8 @@ mod settings;
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 use dedupe::DuplicateGroup;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -221,6 +222,7 @@ fn build_ui(app: &libadwaita::Application) {
     let ref_dirs: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     let per_file_refs: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     let results_data: Arc<Mutex<Vec<GroupData>>> = Arc::new(Mutex::new(Vec::new()));
+    let preview_widgets: Arc<Mutex<HashMap<String, PreviewFileWidgets>>> = Arc::new(Mutex::new(HashMap::new()));
     let app_settings = settings::Settings::load();
     let rotation_enabled = Arc::new(AtomicBool::new(app_settings.rotation_enabled));
     let auto_save = Arc::new(AtomicBool::new(app_settings.auto_save));
@@ -752,7 +754,7 @@ fn build_ui(app: &libadwaita::Application) {
     }));
 
     trash_sel_btn.connect_clicked(clone!(#[strong] selection, #[strong] status_label, 
-        #[strong] window, #[strong] results_data, move |_| {
+        #[strong] window, #[strong] results_data, #[strong] preview_widgets, move |_| {
         let paths: Vec<String> = selection.lock().unwrap().iter().cloned().collect();
         let n = paths.len();
         if n == 0 { return; }
@@ -773,6 +775,7 @@ fn build_ui(app: &libadwaita::Application) {
         let sel = selection.clone();
         let sl = status_label.clone();
         let rd = results_data.clone();
+        let pw = preview_widgets.clone();
         dialog.connect_response(None, move |_, response| {
             if response != "trash" { return; }
             let paths_to_trash: Vec<String> = sel.lock().unwrap().iter().cloned().collect();
@@ -787,9 +790,18 @@ fn build_ui(app: &libadwaita::Application) {
                         for file in group.files.iter() {
                             if file.path == *p {
                                 file.deleted_label.set_visible(true);
+                                file.trash_btn.set_visible(false);
+                                file.restore_btn.set_visible(true);
                                 file.row.set_css_classes(&["deleted"]);
                             }
                         }
+                    }
+                    if let Some(pw_ref) = pw.lock().unwrap().get(p) {
+                        pw_ref.picture.set_visible(false);
+                        pw_ref.status_icon.set_icon_name(Some("user-trash-symbolic"));
+                        pw_ref.status_overlay_label.set_text("Moved to trash");
+                        pw_ref.status_overlay_box.set_visible(true);
+                        pw_ref.trash_btn.set_visible(false);
                     }
                 }
             }
@@ -802,7 +814,7 @@ fn build_ui(app: &libadwaita::Application) {
     }));
 
     move_sel_btn.connect_clicked(clone!(#[strong] selection, #[strong] status_label,
-        #[strong] window, move |_| {
+        #[strong] window, #[strong] results_data, #[strong] preview_widgets, move |_| {
         let paths: Vec<String> = selection.lock().unwrap().iter().cloned().collect();
         if paths.is_empty() { return; }
 
@@ -812,6 +824,8 @@ fn build_ui(app: &libadwaita::Application) {
         let sl = status_label.clone();
         let sel = selection.clone();
         let win = window.clone();
+        let rd = results_data.clone();
+        let pw = preview_widgets.clone();
         dialog.select_folder(
             Some(&window),
             None::<&gtk4::gio::Cancellable>,
@@ -829,6 +843,8 @@ fn build_ui(app: &libadwaita::Application) {
                         let sl2 = sl.clone();
                         let sel2 = sel.clone();
                         let dest2 = dest.clone();
+                        let rd2 = rd.clone();
+                        let pw2 = pw.clone();
                         confirm.choose(Some(&win), None::<&gtk4::gio::Cancellable>, move |confirm_result| {
                             if !matches!(confirm_result, Ok(0)) { return; }
                             
@@ -839,12 +855,57 @@ fn build_ui(app: &libadwaita::Application) {
                                 let target = dest2.join(name);
                                 // Try rename first (fast, same filesystem),
                                 // fall back to copy + remove.
+                                let dest_str = target.display().to_string();
                                 if std::fs::rename(p, &target).is_ok() {
                                     ok += 1;
+                                    // Update main window FileData
+                                    let data = rd2.lock().unwrap();
+                                    for group in data.iter() {
+                                        for file in group.files.iter() {
+                                            if file.path == *p {
+                                                let msg = format!("→ Moved to {}", dest_str);
+                                                file.moved_label.set_text(&msg);
+                                                file.moved_label.set_visible(true);
+                                                file.move_btn.set_visible(false);
+                                            }
+                                        }
+                                    }
+                                    // Update preview window
+                                    if let Some(pw_ref) = pw2.lock().unwrap().get(p) {
+                                        pw_ref.picture.set_visible(false);
+                                        pw_ref.status_icon.set_icon_name(Some("go-jump-symbolic"));
+                                        pw_ref.status_overlay_label.set_text("Moved to:");
+                                        pw_ref.moved_to_label.set_text(&dest_str);
+                                        pw_ref.moved_to_label.set_visible(true);
+                                        pw_ref.status_overlay_box.set_visible(true);
+                                        pw_ref.path_label.set_text(&dest_str);
+                                        pw_ref.move_btn.set_visible(false);
+                                    }
                                 } else if std::fs::copy(p, &target).is_ok()
                                     && std::fs::remove_file(p).is_ok()
                                 {
                                     ok += 1;
+                                    let data = rd2.lock().unwrap();
+                                    for group in data.iter() {
+                                        for file in group.files.iter() {
+                                            if file.path == *p {
+                                                let msg = format!("→ Moved to {}", dest_str);
+                                                file.moved_label.set_text(&msg);
+                                                file.moved_label.set_visible(true);
+                                                file.move_btn.set_visible(false);
+                                            }
+                                        }
+                                    }
+                                    if let Some(pw_ref) = pw2.lock().unwrap().get(p) {
+                                        pw_ref.picture.set_visible(false);
+                                        pw_ref.status_icon.set_icon_name(Some("go-jump-symbolic"));
+                                        pw_ref.status_overlay_label.set_text("Moved to:");
+                                        pw_ref.moved_to_label.set_text(&dest_str);
+                                        pw_ref.moved_to_label.set_visible(true);
+                                        pw_ref.status_overlay_box.set_visible(true);
+                                        pw_ref.path_label.set_text(&dest_str);
+                                        pw_ref.move_btn.set_visible(false);
+                                    }
                                 } else {
                                     sl2.set_text(&format!("Failed to move: {}", p));
                                 }
@@ -1021,7 +1082,8 @@ fn build_ui(app: &libadwaita::Application) {
         #[strong] selection, #[strong] no_results_label, #[strong] scrolled,
         #[strong] toolbar_revealer, #[strong] move_sel_btn, #[strong] trash_sel_btn,
         #[strong] stats_label, #[strong] status_label, #[strong] progress_bar,
-        #[strong] ref_dirs, #[strong] per_file_refs, #[strong] options_popover, move |_| {
+        #[strong] ref_dirs, #[strong] per_file_refs, #[strong] options_popover,
+        #[strong] preview_widgets, move |_| {
         options_popover.popdown();
         let dialog = gtk4::FileDialog::new();
         dialog.set_title("Import results");
@@ -1040,6 +1102,7 @@ fn build_ui(app: &libadwaita::Application) {
         let rd2 = ref_dirs.clone();
         let pfr = per_file_refs.clone();
         let w = window.clone();
+        let pw = preview_widgets.clone();
         dialog.open(Some(&window), None::<&gtk4::gio::Cancellable>, move |result| {
             if let Ok(file) = result {
                 if let Some(path) = file.path() {
@@ -1055,7 +1118,7 @@ fn build_ui(app: &libadwaita::Application) {
                                     let refs = rd2.lock().unwrap();
                                     build_results(&rbox, &rd, &sel, &groups, false,
                                         &dummy_progress, &stl, &sul, &pb, &tr, &mb, &tb,
-                                        &nol, &scr, &refs, &pfr, &w);
+                                        &nol, &scr, &refs, &pfr, &w, &pw);
                                     stl.set_text(&format!("Imported {} groups", groups.len()));
                                 }
                                 Err(e) => {
@@ -1163,7 +1226,7 @@ fn build_ui(app: &libadwaita::Application) {
         #[strong] scrolled, #[strong] progress_bar, #[strong] status_label, #[strong] toolbar_revealer,
         #[strong] scan_btn, #[strong] cancel_btn, #[strong] pause_btn, #[strong] stats_label,
         #[strong] move_sel_btn, #[strong] trash_sel_btn, #[strong] results_data, #[strong] selection,
-        #[strong] window, move |_| {
+        #[strong] window, #[strong] preview_widgets, move |_| {
         selection.lock().unwrap().clear();
         cancel_flag.store(false, Ordering::Relaxed);
         pause_flag.store(false, Ordering::Relaxed);
@@ -1232,6 +1295,7 @@ fn build_ui(app: &libadwaita::Application) {
         let ref_snapshot = ref_dirs.lock().unwrap().clone();
         let timer_per_file = per_file_refs.clone();
         let timer_window = window.clone();
+        let timer_preview = preview_widgets.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
             while let Ok(msg) = msg_rx.try_recv() {
                 match msg {
@@ -1258,7 +1322,7 @@ fn build_ui(app: &libadwaita::Application) {
                             was_cancelled, &timer_progress, &timer_stats, &timer_status,
                             &timer_bar, &timer_toolbar, &timer_move_btn, &timer_trash_btn,
                             &timer_no_results, &timer_scrolled, &ref_snapshot, &timer_per_file,
-                            &timer_window);
+                            &timer_window, &timer_preview);
                         timer_cancel_btn.set_sensitive(false);
                         timer_pause_btn.set_sensitive(false);
                         timer_scan_btn.set_sensitive(true);
@@ -1379,6 +1443,17 @@ struct FileData {
 struct GroupData {
     expander: gtk4::Expander,
     files: Vec<FileData>,
+}
+
+struct PreviewFileWidgets {
+    picture: gtk4::Picture,
+    status_overlay_box: gtk4::Box,
+    status_icon: gtk4::Image,
+    status_overlay_label: gtk4::Label,
+    moved_to_label: gtk4::Label,
+    path_label: gtk4::Label,
+    trash_btn: gtk4::Button,
+    move_btn: gtk4::Button,
 }
 
 fn set_ref_styling(fd: &mut FileData, is_ref: bool) {
@@ -1551,20 +1626,22 @@ fn build_results(results_box: &gtk4::Box,
     ref_dirs: &HashSet<String>,
     per_file_refs: &Arc<Mutex<HashSet<String>>>,
     window: &impl IsA<gtk4::Window>,
+    preview_widgets: &Arc<Mutex<HashMap<String, PreviewFileWidgets>>>,
 ) {
     let pfr_lock = per_file_refs.lock().unwrap();
     let pfr_snapshot = pfr_lock.clone();
     drop(pfr_lock);
+    let pw_in_build = preview_widgets.clone();
     let total_duplicates: usize = groups.iter().map(|g| g.files.len()).sum();
     let total_groups = groups.len();
 
     let mut new_data = Vec::new();
 
-    for (_gi, group) in groups.iter().enumerate() {
+    for (gi, group) in groups.iter().enumerate() {
         let group_label = if group.is_rotation {
-            format!("Duplicate Group #{:016x}  ({} files)  🔄 rotation-matched", group.hash, group.files.len())
+            format!("Group #{} ({} files)  🔄 rotation-matched", gi + 1, group.files.len())
         } else {
-            format!("Duplicate Group #{:016x}  ({} files)", group.hash, group.files.len())
+            format!("Group #{} ({} files)", gi + 1, group.files.len())
         };
         let expander = gtk4::Expander::new(Some(&group_label));
         expander.set_expanded(true);
@@ -1843,6 +1920,7 @@ fn build_results(results_box: &gtk4::Box,
         {
             let paths = group_paths;
             let rd = results_data.clone();
+            let pw_for_view = pw_in_build.clone();
             group_view_btn.connect_clicked(move |_| {
                 let entries: Vec<(String, bool)> = {
                     let data = rd.lock().unwrap();
@@ -1852,7 +1930,7 @@ fn build_results(results_box: &gtk4::Box,
                         .map(|fd| (fd.path.clone(), fd.reference))
                         .collect()
                 };
-                show_group_preview(&entries, &rd);
+                show_group_preview(&entries, &rd, &pw_for_view);
             });
         }
         let group_header = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
@@ -2147,6 +2225,7 @@ fn move_single_file_with_callback<F>(
 fn show_group_preview(
     entries: &[(String, bool)],
     results_data: &Arc<Mutex<Vec<GroupData>>>,
+    preview_widgets: &Arc<Mutex<HashMap<String, PreviewFileWidgets>>>,
 ) {
     let window = gtk4::Window::new();
     window.set_title(Some("Group Preview"));
@@ -2421,12 +2500,36 @@ fn show_group_preview(
         row.append(&info_box);
         row.append(&actions_box);
         main_box.append(&row);
+
+        let pw_reg = preview_widgets.clone();
+        let path_reg = path.clone();
+        pw_reg.lock().unwrap().insert(path_reg, PreviewFileWidgets {
+            picture: picture.clone(),
+            status_overlay_box: status_overlay_box.clone(),
+            status_icon: status_icon.clone(),
+            status_overlay_label: status_overlay_label.clone(),
+            moved_to_label: moved_to_label.clone(),
+            path_label: path_label.clone(),
+            trash_btn: trash_btn.clone(),
+            move_btn: move_btn.clone(),
+        });
     }
 
     main_box.append(&status_label);
     preview_viewport.set_child(Some(&main_box));
     scrolled.set_child(Some(&preview_viewport));
     window.set_child(Some(&scrolled));
+
+    let preview_paths: Vec<String> = entries.iter().map(|(p,_)| p.clone()).collect();
+    let pw_cleanup = preview_widgets.clone();
+    window.connect_close_request(move |_| {
+        let mut map = pw_cleanup.lock().unwrap();
+        for p in &preview_paths {
+            map.remove(p);
+        }
+        glib::Propagation::Proceed
+    });
+
     window.present();
 }
 
