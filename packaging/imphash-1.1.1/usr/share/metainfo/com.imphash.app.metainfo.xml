@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.imphash.app</id>
+  <name>ImpHash</name>
+  <summary>Perceptual image hash comparison tool</summary>
+  <description>
+    <p>Find similar images using perceptual hashing (dHash).</p>
+  </description>
+  <url type="homepage">https://github.com/antoxa78/ImpHash</url>
+  <url type="bugtracker">https://github.com/antoxa78/ImpHash/issues</url>
+  <url type="vcs-browser">https://github.com/antoxa78/ImpHash</url>
+  <project_license>MIT</project_license>
+  <developer id="com.github.antoxa78">
+    <name>antoxa78</name>
+  </developer>
+  <releases>
+    <release version="1.1.1" date="2026-06-12">
+      <description>
+        <p>Removed debug stderr output; fixed preview window state sync for already-trashed/moved files</p>
+      </description>
+    </release>
+  </releases>
+</component>

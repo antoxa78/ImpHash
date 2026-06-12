@@ -276,31 +276,6 @@ pub fn find_duplicates(
         total_b.cmp(&total_a)
     });
 
-    // === DEBUG: dump group details to stderr ===
-    eprintln!("=== DEDUPE DEBUG: {} groups, threshold={}, rotation={} ===",
-        groups.len(), threshold, rotation_mode);
-    for (gi, group) in groups.iter().enumerate() {
-        if group.files.len() > 1 {
-            eprintln!("Group #{} ({} files, anchor_hash={:016x}):",
-                gi, group.files.len(), group.hash);
-            let anchor_rot = &group.files[0].rot_hashes;
-            for f in &group.files {
-                let d = (f.hash ^ group.hash).count_ones();
-                let rot_info = if let (Some(ar), Some(fr)) = (anchor_rot, &f.rot_hashes) {
-                    let rot_d = hasher::rotation_min_distance(ar, fr);
-                    format!(" rot_d={}", rot_d)
-                } else {
-                    String::new()
-                };
-                eprintln!("  d={:2} hash={:016x} lv={} degen={}{} {}",
-                    d, f.hash, f.low_variance,
-                    hasher::is_degenerate_hash(f.hash), rot_info,
-                    f.path.file_name().and_then(|n| n.to_str()).unwrap_or("?"));
-            }
-        }
-    }
-    eprintln!("=== END DEDUPE DEBUG ===");
-
     Ok(groups)
 }
 

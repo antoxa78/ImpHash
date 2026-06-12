@@ -1,0 +1,13 @@
+Package: imphash
+Version: 1.1.1
+Section: graphics
+Priority: optional
+Architecture: amd64
+Depends: libgtk-4-1 (>= 4.12), libadwaita-1-0 (>= 1.5), libgdk-pixbuf-2.0-0, libglib2.0-0, libc6
+Maintainer: antoxa78 <antoxa78@users.noreply.github.com>
+Homepage: https://github.com/antoxa78/ImpHash
+Description: Perceptual image hash comparison tool
+ ImpHash is a GTK4/libadwaita GUI application that finds similar
+ images using perceptual hashing (dHash). It scans directories,
+ computes image hashes, groups similar images, and helps you
+ review and deduplicate them.
