@@ -73,6 +73,23 @@ fn btn_icon_text(label: &str, icon: &str) -> gtk4::Button {
     btn
 }
 
+fn btn_update(btn: &gtk4::Button, label: &str, icon: &str) {
+    if let Some(child) = btn.child() {
+        if let Some(hbox) = child.downcast_ref::<gtk4::Box>() {
+            if let Some(img_widget) = hbox.first_child() {
+                if let Some(img) = img_widget.downcast_ref::<gtk4::Image>() {
+                    img.set_icon_name(Some(icon));
+                }
+                if let Some(lbl_widget) = img_widget.next_sibling() {
+                    if let Some(lbl) = lbl_widget.downcast_ref::<gtk4::Label>() {
+                        lbl.set_text(label);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn add_dir_row(
     path: &str,
     is_ref: bool,
@@ -237,9 +254,12 @@ fn build_ui(app: &libadwaita::Application) {
          .error { color: @error_color; font-weight: bold; }\
          .deleted { background: alpha(@error_color, 0.08); border-left: 3px solid @error_color; padding-left: 3px; }\
          .deleted label { color: @error_color; text-decoration: line-through; }\
+         .deleted button label { text-decoration: none; color: @window_fg_color; }\
          .deleted .dim-label { color: alpha(@error_color, 0.6); }\
          .moved { background: alpha(@success_color, 0.06); border-left: 3px solid @success_color; padding-left: 3px; }\
          .moved label { color: @success_color; }\
+         .moved button label { color: @window_fg_color; }\
+         .moved .dim-label { color: alpha(@success_color, 0.6); }\
          .group-frame { border: 1px solid @borders; border-radius: 8px; background: @card_bg_color; transition: all 150ms ease; }\
          .group-frame:hover { border-color: alpha(@accent_color, 0.3); box-shadow: 0 1px 4px alpha(black, 0.08); }\
          .result-row { padding: 4px 6px; padding-left: 9px; border-radius: 4px; transition: background 100ms ease; }\
@@ -251,15 +271,19 @@ fn build_ui(app: &libadwaita::Application) {
          .group-header-btn { margin: 0 2px; }\
          .group-header { background: alpha(@accent_color, 0.03); border-bottom: 1px solid @borders; padding: 4px 0; }\
          .column-header { font-weight: 600; font-size: 0.85em; color: @insensitive_fg_color; padding: 2px 6px; }\
-         .col-header-row { border-bottom: 1px solid alpha(@borders, 0.7); margin-bottom: 2px; padding-bottom: 2px; }\
+         .col-header-row { border-bottom: 1px solid alpha(@borders, 0.7); margin-bottom: 2px; padding: 2px 6px; padding-left: 9px; }\
          .status-pill { background: alpha(@accent_color, 0.08); border-radius: 12px; padding: 2px 10px; font-weight: 600; }\
          .status-pill-ref { background: alpha(@accent_color, 0.15); color: @accent_color; border-radius: 12px; padding: 2px 10px; font-weight: 600; font-size: 0.85em; }\
          .status-pill-rot { background: alpha(@warning_color, 0.15); color: @warning_color; border-radius: 12px; padding: 2px 10px; font-weight: 600; font-size: 0.85em; }\
          viewport, scrolledwindow, list, box { border: none; background: transparent; }\
-         .card { background: @card_bg_color; border: 1px solid @borders; border-radius: 8px; padding: 8px; }\
+         .card { background: @card_bg_color; border: 1px solid @borders; border-radius: 8px; padding: 8px; transition: all 150ms ease; }\
+         .card:hover { border-color: alpha(@accent_color, 0.3); }\
          .preview-separator { margin: 8px 0; }\
          .group-count-badge { background: alpha(@accent_color, 0.1); border-radius: 10px; padding: 1px 8px; font-size: 0.8em; color: @accent_color; font-weight: 600; }\
-         .filter-active { background: @accent_color; color: white; border-radius: 4px; }"
+         .filter-active { background: @accent_color; color: white; border-radius: 4px; }\
+         .success { color: @success_color; font-weight: 600; }\
+         .small { padding: 2px 8px; font-size: 0.9em; min-height: 24px; }\
+         .no-results { font-size: 1.2em; color: @insensitive_fg_color; }"
     );
     if let Some(display) = gtk4::gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(&display, &provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
@@ -346,8 +370,7 @@ fn build_ui(app: &libadwaita::Application) {
     select_by_btn.set_has_frame(true);
     let options_btn = gtk4::MenuButton::new();
     options_btn.set_label("Options");
-    let clear_results_btn = btn_icon_text("Clear", "edit-clear-symbolic");
-    clear_results_btn.set_tooltip_text(Some("Remove all results and clear the display"));
+    let clear_results_btn = btn_icon_text("Remove All", "edit-clear-symbolic");    clear_results_btn.set_tooltip_text(Some("Remove all results and clear the display"));
 
     let results_box = gtk4::Box::new(gtk4::Orientation::Vertical, 6);
     results_box.set_margin_top(6);
@@ -356,7 +379,7 @@ fn build_ui(app: &libadwaita::Application) {
     scrolled.set_child(Some(&results_box));
 
     let no_results_label = gtk4::Label::new(Some("No duplicate images found"));
-    no_results_label.set_css_classes(&["large-title"]);
+    no_results_label.set_css_classes(&["no-results"]);
     no_results_label.set_halign(gtk4::Align::Center);
     no_results_label.set_valign(gtk4::Align::Center);
     no_results_label.set_vexpand(true);
@@ -574,9 +597,9 @@ fn build_ui(app: &libadwaita::Application) {
         let is_paused = pause_flag.load(Ordering::Relaxed);
         pause_flag.store(!is_paused, Ordering::Relaxed);
         if is_paused {
-            btn.set_label("Pause");
+            btn_update(btn, "Pause", "media-playback-pause-symbolic");
         } else {
-            btn.set_label("Resume");
+            btn_update(btn, "Resume", "media-playback-start-symbolic");
         }
     }));
 
@@ -928,11 +951,12 @@ fn build_ui(app: &libadwaita::Application) {
     options_grid.set_margin_end(8);
     options_grid.set_margin_top(8);
     options_grid.set_margin_bottom(8);
+    options_grid.set_size_request(240, -1);
     let options_title = gtk4::Label::new(Some("Options"));
     options_title.set_css_classes(&["heading"]);
     options_grid.append(&options_title);
 
-    let del_cache_btn = btn_icon_text("Delete cached database", "edit-delete-symbolic");
+    let del_cache_btn = btn_icon_text("Clear hash cache", "edit-delete-symbolic");
     del_cache_btn.set_tooltip_text(Some("Remove all cached image hashes"));
     del_cache_btn.connect_clicked(clone!(#[strong] cache, #[strong] window, #[strong] options_popover, #[strong] status_label, move |_| {
         options_popover.popdown();
@@ -962,18 +986,19 @@ fn build_ui(app: &libadwaita::Application) {
         let rot_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
         rot_row.set_margin_top(4);
         rot_row.set_margin_bottom(4);
-        let rot_label = gtk4::Label::new(Some("Rotation-invariant matching"));
+        let rot_label = gtk4::Label::new(Some("Rotation matching"));
         rot_label.set_hexpand(true);
         rot_label.set_halign(gtk4::Align::Start);
         rot_label.set_tooltip_text(Some("Detect images that are rotated 90\u{b0}, 180\u{b0}, or 270\u{b0} copies of each other. Slightly slower scan."));
-        let rot_switch = gtk4::CheckButton::new();
+        let rot_switch = gtk4::Switch::new();
         rot_switch.set_active(rotation_enabled.load(Ordering::Relaxed));
-        rot_switch.connect_toggled(clone!(#[strong] rotation_enabled, #[strong] auto_save, #[strong] threshold_val,
-            #[strong] dirs, #[strong] ref_dirs, move |cb| {
-            let val = cb.is_active();
+        rot_switch.set_valign(gtk4::Align::Center);
+        rot_switch.connect_state_set(clone!(#[strong] rotation_enabled, #[strong] auto_save, #[strong] threshold_val,
+            #[strong] dirs, #[strong] ref_dirs, move |_, val| {
             rotation_enabled.store(val, Ordering::Relaxed);
             save_settings(&auto_save, &rotation_enabled, &threshold_val,
                 &*dirs.lock().unwrap(), &*ref_dirs.lock().unwrap());
+            glib::Propagation::Proceed
         }));
         rot_row.append(&rot_label);
         rot_row.append(&rot_switch);
@@ -984,7 +1009,7 @@ fn build_ui(app: &libadwaita::Application) {
         let thr_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
         thr_row.set_margin_top(4);
         thr_row.set_margin_bottom(4);
-        let thr_label = gtk4::Label::new(Some("Sensitivity (Hamming threshold, default 2)"));
+        let thr_label = gtk4::Label::new(Some("Sensitivity"));
         thr_label.set_hexpand(true);
         thr_label.set_halign(gtk4::Align::Start);
         thr_label.set_tooltip_text(Some("Lower = stricter matching. 2 = exact/near-exact duplicates only. 8 = similar images allowed. Default: 2."));
@@ -1000,11 +1025,12 @@ fn build_ui(app: &libadwaita::Application) {
         thr_row.append(&thr_label);
         thr_row.append(&thr_spin);
         options_grid.append(&thr_row);
-        let thr_desc = gtk4::Label::new(Some("Lower = stricter. 2 finds only near-identical images (default). 8 catches similar images too."));
+        let thr_desc = gtk4::Label::new(Some("Lower = stricter. Default 2 (near-identical). Up to 8 for similar images."));
         thr_desc.set_css_classes(&["dim-label"]);
         thr_desc.set_margin_start(12);
         thr_desc.set_margin_bottom(6);
         thr_desc.set_wrap(true);
+        thr_desc.set_max_width_chars(32);
         thr_desc.set_xalign(0.0);
         options_grid.append(&thr_desc);
     }
@@ -1016,15 +1042,16 @@ fn build_ui(app: &libadwaita::Application) {
         let as_label = gtk4::Label::new(Some("Auto-save settings"));
         as_label.set_hexpand(true);
         as_label.set_halign(gtk4::Align::Start);
-        as_label.set_tooltip_text(Some("When enabled, rotation toggle state is remembered across restarts."));
-        let as_switch = gtk4::CheckButton::new();
+        as_label.set_tooltip_text(Some("When enabled, directories, reference paths, and options are remembered across restarts."));
+        let as_switch = gtk4::Switch::new();
         as_switch.set_active(auto_save.load(Ordering::Relaxed));
-        as_switch.connect_toggled(clone!(#[strong] auto_save, #[strong] rotation_enabled, #[strong] threshold_val,
-            #[strong] dirs, #[strong] ref_dirs, move |cb| {
-            let val = cb.is_active();
+        as_switch.set_valign(gtk4::Align::Center);
+        as_switch.connect_state_set(clone!(#[strong] auto_save, #[strong] rotation_enabled, #[strong] threshold_val,
+            #[strong] dirs, #[strong] ref_dirs, move |_, val| {
             auto_save.store(val, Ordering::Relaxed);
             save_settings(&auto_save, &rotation_enabled, &threshold_val,
                 &*dirs.lock().unwrap(), &*ref_dirs.lock().unwrap());
+            glib::Propagation::Proceed
         }));
         as_row.append(&as_label);
         as_row.append(&as_switch);
@@ -1043,6 +1070,9 @@ fn build_ui(app: &libadwaita::Application) {
         options_popover.popdown();
         let dialog = gtk4::FileDialog::new();
         dialog.set_title("Export results");
+        let now = chrono::Local::now();
+        let default_name = format!("imphash-export-{}.json", now.format("%Y%m%d-%H%M%S"));
+        dialog.set_initial_name(Some(&default_name));
         let rd = results_data.clone();
         let sl = stats_label.clone();
         dialog.save(Some(&window), None::<&gtk4::gio::Cancellable>, move |result| {
@@ -1230,7 +1260,7 @@ fn build_ui(app: &libadwaita::Application) {
         selection.lock().unwrap().clear();
         cancel_flag.store(false, Ordering::Relaxed);
         pause_flag.store(false, Ordering::Relaxed);
-        pause_btn.set_label("Pause");
+        btn_update(&pause_btn, "Pause", "media-playback-pause-symbolic");
 
         let dirs_snapshot = dirs.lock().unwrap().clone();
         let dir_paths: Vec<PathBuf> = dirs_snapshot.iter().map(PathBuf::from).collect();
@@ -1438,6 +1468,7 @@ struct FileData {
     trash_btn: gtk4::Button,
     move_btn: gtk4::Button,
     restore_btn: gtk4::Button,
+    restore_move_btn: gtk4::Button,
 }
 
 struct GroupData {
@@ -1445,6 +1476,7 @@ struct GroupData {
     files: Vec<FileData>,
 }
 
+#[allow(dead_code)]
 struct PreviewFileWidgets {
     picture: gtk4::Picture,
     status_overlay_box: gtk4::Box,
@@ -1454,6 +1486,8 @@ struct PreviewFileWidgets {
     path_label: gtk4::Label,
     trash_btn: gtk4::Button,
     move_btn: gtk4::Button,
+    restore_btn: gtk4::Button,
+    restore_move_btn: gtk4::Button,
 }
 
 fn set_ref_styling(fd: &mut FileData, is_ref: bool) {
@@ -1529,6 +1563,81 @@ fn do_select_all(
     stats_label.set_text(&format!("Selected: {}", n));
 }
 
+fn read_exif_string_tag(tiff: &[u8], ifd_off: usize, tag: u16, little_endian: bool) -> Option<String> {
+    let read_u16 = |buf: &[u8], off: usize| -> Option<u16> {
+        let b = buf.get(off..off+2)?;
+        Some(if little_endian { u16::from_le_bytes([b[0], b[1]]) }
+             else { u16::from_be_bytes([b[0], b[1]]) })
+    };
+    let read_u32 = |buf: &[u8], off: usize| -> Option<u32> {
+        let b = buf.get(off..off+4)?;
+        Some(if little_endian { u32::from_le_bytes([b[0], b[1], b[2], b[3]]) }
+             else { u32::from_be_bytes([b[0], b[1], b[2], b[3]]) })
+    };
+    let count = read_u16(tiff, ifd_off)? as usize;
+    for t in 0..count {
+        let entry = ifd_off + 2 + t * 12;
+        if entry + 12 > tiff.len() { break; }
+        let t = read_u16(tiff, entry)?;
+        if t != tag { continue; }
+        let value_type = read_u16(tiff, entry + 2)?;
+        let value_count = read_u32(tiff, entry + 4)? as usize;
+        let read_str = |off: usize, len: usize| -> Option<String> {
+            let raw = tiff.get(off..off + len)?;
+            let trimmed = raw.iter().take_while(|&&b| b != 0).copied().collect::<Vec<_>>();
+            String::from_utf8(trimmed).ok()
+        };
+        return if value_type == 2 && value_count > 0 {
+            if value_count <= 4 {
+                read_str(entry + 8, value_count)
+            } else {
+                let off = read_u32(tiff, entry + 8)? as usize;
+                read_str(off, value_count)
+            }
+        } else {
+            None
+        };
+    }
+    None
+}
+
+fn read_exif_model(path: &str) -> Option<String> {
+    let data = std::fs::read(path).ok()?;
+    if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+        return None;
+    }
+    let mut i = 2usize;
+    while i + 3 < data.len() {
+        if data[i] != 0xFF { break; }
+        let marker = data[i + 1];
+        let seg_len = u16::from_be_bytes([data[i + 2], data[i + 3]]) as usize;
+        if marker == 0xE1 && i + 4 + seg_len <= data.len() {
+            let seg = &data[i + 4..i + 2 + seg_len];
+            if seg.len() > 6 && &seg[0..6] == b"Exif\0\0" {
+                let tiff = &seg[6..];
+                if tiff.len() < 8 { return None; }
+                let little_endian = &tiff[0..2] == b"II";
+                let read_u32 = |buf: &[u8], off: usize| -> Option<u32> {
+                    let b = buf.get(off..off+4)?;
+                    Some(if little_endian { u32::from_le_bytes([b[0], b[1], b[2], b[3]]) }
+                         else { u32::from_be_bytes([b[0], b[1], b[2], b[3]]) })
+                };
+                let ifd0_offset = read_u32(tiff, 4)? as usize;
+                // Check Model (0x0110) and Make (0x010F), prefer Model
+                if let Some(model) = read_exif_string_tag(tiff, ifd0_offset, 0x0110, little_endian) {
+                    return Some(model);
+                }
+                if let Some(make) = read_exif_string_tag(tiff, ifd0_offset, 0x010F, little_endian) {
+                    return Some(make);
+                }
+            }
+        }
+        if seg_len < 2 { break; }
+        i += 2 + seg_len;
+    }
+    None
+}
+
 fn read_exif_date(path: &str) -> Option<String> {
     let data = std::fs::read(path).ok()?;
     // Only attempt JPEG (SOI marker FF D8)
@@ -1591,11 +1700,11 @@ fn read_exif_date(path: &str) -> Option<String> {
                                     if parts.len() == 2 {
                                         let date = parts[0].replace(':', "-");
                                         let time = &parts[1][..5]; // HH:MM
-                                        return Some(format!("📅 {} {}", date, time));
+                                        return Some(format!("{} {}", date, time));
                                     }
                                     // Fallback: replace all colons
                                     let d = s.replace(':', "-");
-                                    return Some(format!("📅 {}", &d[..16]));
+                                    return Some(d[..16].to_string());
                                 }
                             }
                         }
@@ -1639,7 +1748,7 @@ fn build_results(results_box: &gtk4::Box,
 
     for (gi, group) in groups.iter().enumerate() {
         let group_label = if group.is_rotation {
-            format!("Group #{} ({} files)  🔄 rotation-matched", gi + 1, group.files.len())
+            format!("Group #{} ({} files) — rotation-matched", gi + 1, group.files.len())
         } else {
             format!("Group #{} ({} files)", gi + 1, group.files.len())
         };
@@ -1679,6 +1788,7 @@ fn build_results(results_box: &gtk4::Box,
         ch_actions.set_css_classes(&["column-header"]);
         ch_actions.set_size_request(170, -1);
         ch_actions.set_halign(gtk4::Align::End);
+        ch_actions.set_margin_start(4);
         // Right-side header columns in a fixed box so separators always align
         let ch_right = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
         ch_right.set_halign(gtk4::Align::End);
@@ -1737,7 +1847,10 @@ fn build_results(results_box: &gtk4::Box,
             let restore_btn = btn_icon_text("Restore", "document-revert-symbolic");
             restore_btn.set_css_classes(&["small"]);
             restore_btn.set_visible(false);
-            let deleted_label = gtk4::Label::new(Some("🗑 Moved to trash"));
+            let restore_move_btn = btn_icon_text("Restore", "document-revert-symbolic");
+            restore_move_btn.set_css_classes(&["small"]);
+            restore_move_btn.set_visible(false);
+            let deleted_label = gtk4::Label::new(Some("Moved to trash"));
             deleted_label.set_css_classes(&["error"]);
             deleted_label.set_visible(false);
             deleted_label.set_margin_start(12);
@@ -1748,6 +1861,41 @@ fn build_results(results_box: &gtk4::Box,
             moved_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
             moved_label.set_margin_start(12);
             moved_label.set_margin_end(12);
+            let rmb = restore_move_btn.clone();
+            let rmb_path = path_str.clone();
+            let rmb_moved_label = moved_label.clone();
+            let rmb_move_btn = move_btn.clone();
+            let rmb_row = row.clone();
+            let rmb_was_ref = is_ref;
+            let rmb_status = status_label.clone();
+            restore_move_btn.connect_clicked(move |_| {
+                let dest_text = rmb_moved_label.text().to_string();
+                let dest = dest_text.strip_prefix("→ ").unwrap_or(&dest_text).to_string();
+                if dest.is_empty() {
+                    rmb_status.set_text("No destination to restore from");
+                    return;
+                }
+                let target = std::path::Path::new(&rmb_path);
+                if target.parent().map_or(false, |p| !p.exists()) {
+                    rmb_status.set_text("Original directory no longer exists");
+                    return;
+                }
+                if std::fs::rename(&dest, &rmb_path).is_ok()
+                    || (std::fs::copy(&dest, &rmb_path).is_ok() && std::fs::remove_file(&dest).is_ok())
+                {
+                    rmb_status.set_text(&format!("Restored to: {}", rmb_path));
+                    rmb.set_visible(false);
+                    rmb_move_btn.set_visible(true);
+                    rmb_moved_label.set_visible(false);
+                    if rmb_was_ref {
+                        rmb_row.set_css_classes(&["result-row", "ref-row"]);
+                    } else {
+                        rmb_row.set_css_classes(&["result-row"]);
+                    }
+                } else {
+                    rmb_status.set_text(&format!("Failed to restore: {}", dest));
+                }
+            });
             if is_ref {
                 row.set_css_classes(&["ref-row"]);
                 name_label.set_css_classes(&["ref-path"]);
@@ -1769,9 +1917,11 @@ fn build_results(results_box: &gtk4::Box,
             let actions_cell = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
             actions_cell.set_size_request(170, -1);
             actions_cell.set_halign(gtk4::Align::End);
+            actions_cell.set_margin_start(4);
             actions_cell.append(&move_btn);
             actions_cell.append(&trash_btn);
             actions_cell.append(&restore_btn);
+            actions_cell.append(&restore_move_btn);
             row_right.append(&mk_row_sep());
             row_right.append(&date_label);
             row_right.append(&mk_row_sep());
@@ -1816,6 +1966,9 @@ fn build_results(results_box: &gtk4::Box,
             let pw = window.clone();
             let check_clone = check.clone();
             let check_clone2 = check.clone();
+            let rm_btn = restore_move_btn.clone();
+            let row_clone = row.clone();
+            let was_ref = is_ref;
             move_btn.connect_clicked(clone!(#[strong] path_str, #[strong] status_label,
                 #[strong] moved_label, #[strong] move_btn, move |_| {
                 if !check_clone.is_active() {
@@ -1829,7 +1982,22 @@ fn build_results(results_box: &gtk4::Box,
                     });
                     return;
                 }
-                move_single_file_with_label(&path_str, &status_label, &pw, &moved_label, &move_btn);
+                let ml = moved_label.clone();
+                let sl2 = status_label.clone();
+                let rm = rm_btn.clone();
+                let rc = row_clone.clone();
+                let wr = was_ref;
+                let mb = move_btn.clone();
+                move_single_file_with_callback(&path_str, &sl2, &pw, &mb, move |dest| {
+                    ml.set_text(&format!("→ {}", dest));
+                    ml.set_visible(true);
+                    rm.set_visible(true);
+                    if wr {
+                        rc.set_css_classes(&["result-row", "ref-row", "moved"]);
+                    } else {
+                        rc.set_css_classes(&["result-row", "moved"]);
+                    }
+                });
             }));
             trash_btn.connect_clicked(clone!(#[strong] path_str, #[strong] status_label,
                 #[strong] deleted_label, #[strong] row, #[strong] trash_btn, #[strong] restore_btn, move |_| {
@@ -1898,6 +2066,20 @@ fn build_results(results_box: &gtk4::Box,
                 }
             });
 
+            // Mark files that no longer exist on disk (e.g. after importing saved results)
+            if !std::path::Path::new(&path_str).exists() {
+                deleted_label.set_text("File not found");
+                deleted_label.set_visible(true);
+                trash_btn.set_visible(false);
+                move_btn.set_visible(false);
+                check.set_sensitive(false);
+                if is_ref {
+                    row.set_css_classes(&["deleted", "ref-row"]);
+                } else {
+                    row.set_css_classes(&["deleted"]);
+                }
+            }
+
             files_box.append(&row);
             file_datas.push(FileData {
                 path: path_str,
@@ -1912,6 +2094,7 @@ fn build_results(results_box: &gtk4::Box,
                 trash_btn: trash_btn.clone(),
                 move_btn: move_btn.clone(),
                 restore_btn: restore_btn.clone(),
+                restore_move_btn: restore_move_btn.clone(),
             });
         }
         let group_paths: Vec<String> = file_datas.iter().map(|fd| fd.path.clone()).collect();
@@ -1921,6 +2104,7 @@ fn build_results(results_box: &gtk4::Box,
             let paths = group_paths;
             let rd = results_data.clone();
             let pw_for_view = pw_in_build.clone();
+            let group_num = gi + 1;
             group_view_btn.connect_clicked(move |_| {
                 let entries: Vec<(String, bool)> = {
                     let data = rd.lock().unwrap();
@@ -1930,7 +2114,7 @@ fn build_results(results_box: &gtk4::Box,
                         .map(|fd| (fd.path.clone(), fd.reference))
                         .collect()
                 };
-                show_group_preview(&entries, &rd, &pw_for_view);
+                show_group_preview(&entries, &rd, &pw_for_view, group_num);
             });
         }
         let group_header = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
@@ -2154,6 +2338,7 @@ fn load_pixbuf_scaled(path: &str, max_size: i32) -> Option<gdk_pixbuf::Pixbuf> {
     }
 }
 
+#[allow(dead_code)]
 fn move_single_file_with_label(
     path: &str,
     status_label: &gtk4::Label,
@@ -2226,9 +2411,10 @@ fn show_group_preview(
     entries: &[(String, bool)],
     results_data: &Arc<Mutex<Vec<GroupData>>>,
     preview_widgets: &Arc<Mutex<HashMap<String, PreviewFileWidgets>>>,
+    group_number: usize,
 ) {
     let window = gtk4::Window::new();
-    window.set_title(Some("Group Preview"));
+    window.set_title(Some(&format!("ImpHash — Group #{} Preview", group_number)));
     window.set_default_size(900, 700);
     window.maximize();
 
@@ -2238,6 +2424,7 @@ fn show_group_preview(
         trash_btn: gtk4::Button,
         move_btn: gtk4::Button,
         restore_btn: gtk4::Button,
+        restore_move_btn: gtk4::Button,
         row: gtk4::Box,
         reference: bool,
     }
@@ -2252,6 +2439,7 @@ fn show_group_preview(
             trash_btn: fd.trash_btn.clone(),
             move_btn: fd.move_btn.clone(),
             restore_btn: fd.restore_btn.clone(),
+            restore_move_btn: fd.restore_move_btn.clone(),
             row: fd.row.clone(),
             reference: fd.reference,
         }))
@@ -2274,7 +2462,7 @@ fn show_group_preview(
     main_box.set_margin_end(12);
 
     let n = entries.len();
-    let title = gtk4::Label::new(Some(&format!("Previewing {} image{}", n, if n == 1 { "" } else { "s" })));
+    let title = gtk4::Label::new(Some(&format!("Group #{} — Previewing {} image{}", group_number, n, if n == 1 { "" } else { "s" })));
     title.set_css_classes(&["heading"]);
     title.set_halign(gtk4::Align::Start);
     title.set_margin_bottom(4);
@@ -2367,47 +2555,45 @@ fn show_group_preview(
         }
 
         let path_label = gtk4::Label::new(Some(path));
-        path_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
-        path_label.set_max_width_chars(40);
         path_label.set_halign(gtk4::Align::Start);
         path_label.set_css_classes(&["dim-label"]);
+        path_label.set_wrap(true);
+        path_label.set_selectable(true);
 
         let res_str = image::image_dimensions(std::path::Path::new(path))
             .ok().map(|(w, h)| format!("{}x{}", w, h)).unwrap_or_default();
         let size_val = std::fs::metadata(path).ok().map(|m| m.len()).unwrap_or(0);
         let size_str = preview::format_size(size_val);
         let date_str = read_exif_date(path);
+        let model_str = read_exif_model(path);
 
-        let meta_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
+        let meta_box = gtk4::Box::new(gtk4::Orientation::Vertical, 3);
         meta_box.set_halign(gtk4::Align::Start);
+        meta_box.set_margin_top(4);
+
+        let mk_row = |label: &str, value: &str| -> gtk4::Box {
+            let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+            let lbl = gtk4::Label::new(Some(label));
+            lbl.set_css_classes(&["dim-label"]);
+            lbl.set_width_chars(11);
+            lbl.set_xalign(1.0);
+            let val = gtk4::Label::new(Some(value));
+            val.set_halign(gtk4::Align::Start);
+            row.append(&lbl);
+            row.append(&val);
+            row
+        };
+
         if let Some(ref d) = date_str {
-            let date_label = gtk4::Label::new(Some(d));
-            date_label.set_css_classes(&["dim-label"]);
-            meta_box.append(&date_label);
-            let dot = gtk4::Label::new(Some("\u{00b7}"));
-            dot.set_css_classes(&["dim-label"]);
-            meta_box.append(&dot);
+            meta_box.append(&mk_row("Date Taken", d));
+        }
+        if let Some(ref m) = model_str {
+            meta_box.append(&mk_row("Camera", m));
         }
         if !res_str.is_empty() {
-            let res_label = gtk4::Label::new(Some(&res_str));
-            res_label.set_css_classes(&["dim-label"]);
-            meta_box.append(&res_label);
-            let dot = gtk4::Label::new(Some("\u{00b7}"));
-            dot.set_css_classes(&["dim-label"]);
-            meta_box.append(&dot);
+            meta_box.append(&mk_row("Resolution", &res_str));
         }
-        let size_label = gtk4::Label::new(Some(&size_str));
-        size_label.set_css_classes(&["dim-label"]);
-        meta_box.append(&size_label);
-
-        if *is_ref {
-            let dot = gtk4::Label::new(Some("\u{00b7}"));
-            dot.set_css_classes(&["dim-label"]);
-            meta_box.append(&dot);
-            let ref_badge = gtk4::Label::new(Some("REF"));
-            ref_badge.set_css_classes(&["status-pill"]);
-            meta_box.append(&ref_badge);
-        }
+        meta_box.append(&mk_row("Size", &size_str));
 
         info_box.append(&name_label);
         info_box.append(&path_label);
@@ -2415,6 +2601,10 @@ fn show_group_preview(
 
         let actions_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
         actions_box.set_valign(gtk4::Align::Center);
+
+        let restore_move_btn = btn_icon_text("Restore", "document-revert-symbolic");
+        restore_move_btn.set_css_classes(&["small"]);
+        restore_move_btn.set_visible(false);
 
         let move_btn = btn_icon_text("Move", "go-jump-symbolic");
         move_btn.set_css_classes(&["small"]);
@@ -2429,6 +2619,7 @@ fn show_group_preview(
         let overlay_lbl_move = status_overlay_label.clone();
         let moved_to_lbl_move = moved_to_label.clone();
         let path_lbl_move = path_label.clone();
+        let prmb = restore_move_btn.clone();
         move_btn.connect_clicked(move |_| {
             let mw = mw_move.clone();
             let p = path_for_move.clone();
@@ -2439,6 +2630,7 @@ fn show_group_preview(
             let ol = overlay_lbl_move.clone();
             let mtl = moved_to_lbl_move.clone();
             let pl = path_lbl_move.clone();
+            let prmb = prmb.clone();
             move_single_file_with_callback(&p, &sl, &pw, &move_btn_ref, move |dest_path| {
                 // Switch thumbnail to moved icon + new path
                 pic.set_visible(false);
@@ -2448,21 +2640,32 @@ fn show_group_preview(
                 mtl.set_visible(true);
                 ov.set_visible(true);
                 pl.set_text(&dest_path);
+                prmb.set_visible(true);
                 // Update main window
                 if let Some(w) = mw.get(&p2) {
-                    let msg = format!("→ Moved to {}", dest_path);
-                    w.moved_label.set_text(&msg);
+                    w.moved_label.set_text(&format!("→ {}", dest_path));
                     w.moved_label.set_visible(true);
                     w.move_btn.set_visible(false);
+                    w.restore_move_btn.set_visible(true);
+                    if w.reference {
+                        w.row.set_css_classes(&["result-row", "ref-row", "moved"]);
+                    } else {
+                        w.row.set_css_classes(&["result-row", "moved"]);
+                    }
                 }
             });
         });
+
+        let restore_btn = btn_icon_text("Restore", "document-revert-symbolic");
+        restore_btn.set_css_classes(&["small"]);
+        restore_btn.set_visible(false);
 
         let trash_btn = btn_icon_text("Trash", "user-trash-symbolic");
         trash_btn.set_css_classes(&["small", "destructive-action"]);
         let path_for_trash = path.clone();
         let sl2 = status_label.clone();
         let trash_btn_ref = trash_btn.clone();
+        let restore_btn_ref2 = restore_btn.clone();
         let mw_trash = main_widgets.clone();
         let picture_trash = picture.clone();
         let overlay_trash = status_overlay_box.clone();
@@ -2470,13 +2673,14 @@ fn show_group_preview(
         let overlay_lbl_trash = status_overlay_label.clone();
         trash_btn.connect_clicked(move |_| {
             if trash::delete(&path_for_trash).is_ok() {
-                sl2.set_text(&format!("🗑 Trashed: {}", path_for_trash));
+                sl2.set_text(&format!("Trashed: {}", path_for_trash));
                 // Switch thumbnail to trash icon
                 picture_trash.set_visible(false);
                 icon_trash.set_icon_name(Some("user-trash-symbolic"));
                 overlay_lbl_trash.set_text("Moved to trash");
                 overlay_trash.set_visible(true);
                 trash_btn_ref.set_visible(false);
+                restore_btn_ref2.set_visible(true);
                 // Update main window
                 if let Some(w) = mw_trash.get(&path_for_trash) {
                     w.deleted_label.set_visible(true);
@@ -2493,8 +2697,117 @@ fn show_group_preview(
             }
         });
 
+        let path_for_restore = path.clone();
+        let sl_restore = status_label.clone();
+        let mw_restore = main_widgets.clone();
+        let pic_restore = picture.clone();
+        let overlay_restore = status_overlay_box.clone();
+        let icon_restore = status_icon.clone();
+        let overlay_lbl_restore = status_overlay_label.clone();
+        let trash_btn_restore = trash_btn.clone();
+        let restore_btn_ref = restore_btn.clone();
+        let moved_to_lbl_restore = moved_to_label.clone();
+        restore_btn.connect_clicked(move |_| {
+            let items = match trash::os_limited::list() {
+                Ok(items) => items,
+                Err(e) => {
+                    sl_restore.set_text(&format!("Failed to list trash: {}", e));
+                    return;
+                }
+            };
+            let rp = path_for_restore.clone();
+            let to_restore: Vec<trash::TrashItem> = items.into_iter()
+                .filter(|item| item.original_path() == std::path::Path::new(&rp))
+                .collect();
+            if to_restore.is_empty() {
+                sl_restore.set_text("File not found in trash");
+                return;
+            }
+            match trash::os_limited::restore_all(to_restore) {
+                Ok(()) => {
+                    sl_restore.set_text(&format!("Restored: {}", rp));
+                    // Switch back to thumbnail
+                    pic_restore.set_visible(true);
+                    icon_restore.set_icon_name(Some(""));
+                    overlay_lbl_restore.set_text("");
+                    moved_to_lbl_restore.set_visible(false);
+                    overlay_restore.set_visible(false);
+                    restore_btn_ref.set_visible(false);
+                    trash_btn_restore.set_visible(true);
+                    // Update main window
+                    if let Some(w) = mw_restore.get(&rp) {
+                        w.deleted_label.set_visible(false);
+                        w.trash_btn.set_visible(true);
+                        w.restore_btn.set_visible(false);
+                        if w.reference {
+                            w.row.set_css_classes(&["result-row", "ref-row"]);
+                        } else {
+                            w.row.set_css_classes(&["result-row"]);
+                        }
+                    }
+                }
+                Err(e) => {
+                    sl_restore.set_text(&format!("Failed to restore: {}", e));
+                }
+            }
+        });
+
+        let rmb_path = path.clone();
+        let rmb_moved_to = moved_to_label.clone();
+        let rmb_move_btn = move_btn.clone();
+        let rmb_pic = picture.clone();
+        let rmb_overlay = status_overlay_box.clone();
+        let rmb_icon = status_icon.clone();
+        let rmb_overlay_lbl = status_overlay_label.clone();
+        let rmb_mtl = moved_to_label.clone();
+        let rmb_pl = path_label.clone();
+        let rmb_mw = main_widgets.clone();
+        let rmb_sl = status_label.clone();
+        let rmb_self = restore_move_btn.clone();
+        restore_move_btn.connect_clicked(move |_| {
+            let dest = rmb_moved_to.text().to_string();
+            if dest.is_empty() {
+                rmb_sl.set_text("No destination to restore from");
+                return;
+            }
+            let target = std::path::Path::new(&rmb_path);
+            if target.parent().map_or(false, |p| !p.exists()) {
+                rmb_sl.set_text("Original directory no longer exists");
+                return;
+            }
+            if std::fs::rename(&dest, &rmb_path).is_ok()
+                || (std::fs::copy(&dest, &rmb_path).is_ok() && std::fs::remove_file(&dest).is_ok())
+            {
+                rmb_sl.set_text(&format!("Restored to: {}", rmb_path));
+                // Switch back to thumbnail
+                rmb_pic.set_visible(true);
+                rmb_icon.set_icon_name(Some(""));
+                rmb_overlay_lbl.set_text("");
+                rmb_mtl.set_visible(false);
+                rmb_overlay.set_visible(false);
+                rmb_pl.set_text(&rmb_path);
+                rmb_self.set_visible(false);
+                rmb_move_btn.set_visible(true);
+                // Update main window
+                if let Some(w) = rmb_mw.get(&rmb_path) {
+                    w.moved_label.set_visible(false);
+                    w.move_btn.set_visible(true);
+                    w.restore_move_btn.set_visible(false);
+                    if w.reference {
+                        w.row.set_css_classes(&["result-row", "ref-row"]);
+                    } else {
+                        w.row.set_css_classes(&["result-row"]);
+                    }
+                }
+            } else {
+                rmb_sl.set_text(&format!("Failed to restore: {}", dest));
+            }
+        });
+
         actions_box.append(&move_btn);
         actions_box.append(&trash_btn);
+        actions_box.append(&restore_btn);
+        actions_box.append(&restore_move_btn);
 
         row.append(&image_box);
         row.append(&info_box);
@@ -2512,19 +2825,29 @@ fn show_group_preview(
             path_label: path_label.clone(),
             trash_btn: trash_btn.clone(),
             move_btn: move_btn.clone(),
+            restore_btn: restore_btn.clone(),
+            restore_move_btn: restore_move_btn.clone(),
         });
 
-        // Sync preview state with main window for already-trashed/moved files
+        // Sync preview state with main window for already-trashed/moved/missing files
         if let Some(mw) = main_widgets.get(path) {
             if mw.deleted_label.is_visible() {
                 picture.set_visible(false);
-                status_icon.set_icon_name(Some("user-trash-symbolic"));
-                status_overlay_label.set_text("Moved to trash");
                 status_overlay_box.set_visible(true);
                 trash_btn.set_visible(false);
+                let is_missing = mw.deleted_label.text() == "File not found";
+                if is_missing {
+                    status_icon.set_icon_name(Some("image-missing-symbolic"));
+                    status_overlay_label.set_text("File not found");
+                    move_btn.set_visible(false);
+                } else {
+                    status_icon.set_icon_name(Some("user-trash-symbolic"));
+                    status_overlay_label.set_text("Moved to trash");
+                    restore_btn.set_visible(true);
+                }
             } else if mw.moved_label.is_visible() {
                 let dest = mw.moved_label.text().to_string();
-                let dest = dest.strip_prefix("→ Moved to ").unwrap_or(&dest).to_string();
+                let dest = dest.strip_prefix("→ ").unwrap_or(&dest).to_string();
                 picture.set_visible(false);
                 status_icon.set_icon_name(Some("go-jump-symbolic"));
                 status_overlay_label.set_text("Moved to:");
@@ -2533,6 +2856,11 @@ fn show_group_preview(
                 status_overlay_box.set_visible(true);
                 path_label.set_text(&dest);
                 move_btn.set_visible(false);
+                restore_move_btn.set_visible(true);
+                // Load thumbnail from destination so it's ready for restore
+                if let Some(pixbuf) = load_pixbuf_scaled(&dest, 1200) {
+                    picture.set_paintable(Some(&gtk4::gdk::Texture::for_pixbuf(&pixbuf)));
+                }
             }
         }
     }
