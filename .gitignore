@@ -1,0 +1,6 @@
+/target/
+*.tar.gz
+*.tar
+*.bak
+*.swp
+*~
