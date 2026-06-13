@@ -46,7 +46,7 @@ priority = "optional"
 # older distros ship libdav1d6.
 # libheif is compiled statically via embedded-libheif — no runtime dep needed.
 # GTK4/Adwaita are always present on a GNOME desktop but listed for bare installs.
-depends = "libdav1d7 | libdav1d6, libgtk-4-1, libadwaita-1-0, libgdk-pixbuf-2.0-0, libjpeg62-turbo | libjpeg62"
+depends = "libdav1d7 | libdav1d6, libgtk-4-1, libadwaita-1-0, libgdk-pixbuf-2.0-0"
 assets = [
     ["target/release/imphash",  "usr/bin/imphash",                                    "755"],
     ["assets/imphash.desktop",  "usr/share/applications/imphash.desktop",             "644"],
