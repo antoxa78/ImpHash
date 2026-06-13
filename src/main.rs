@@ -238,7 +238,6 @@ fn build_ui(app: &libadwaita::Application) {
     let selection: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     let dirs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let ref_dirs: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
-    let per_file_refs: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     let results_data: Arc<Mutex<Vec<GroupData>>> = Arc::new(Mutex::new(Vec::new()));
     let preview_widgets: Arc<Mutex<HashMap<String, PreviewFileWidgets>>> = Arc::new(Mutex::new(HashMap::new()));
     let app_settings = settings::Settings::load();
@@ -815,6 +814,7 @@ fn build_ui(app: &libadwaita::Application) {
                             if file.path == *p {
                                 file.deleted_label.set_visible(true);
                                 file.trash_btn.set_visible(false);
+                                file.move_btn.set_visible(false);
                                 file.restore_btn.set_visible(true);
                                 file.row.set_css_classes(&["deleted"]);
                             }
@@ -1013,7 +1013,7 @@ fn build_ui(app: &libadwaita::Application) {
         let thr_label = gtk4::Label::new(Some("Sensitivity"));
         thr_label.set_hexpand(true);
         thr_label.set_halign(gtk4::Align::Start);
-        thr_label.set_tooltip_text(Some("Lower = stricter matching. 2 = exact/near-exact duplicates only. 8 = similar images allowed. Default: 2."));
+        thr_label.set_tooltip_text(Some("Lower = stricter matching. Default 2 = near-identical duplicates only. Higher values allow more similar images (up to 8 recommended)."));
         let thr_spin = gtk4::SpinButton::with_range(1.0, 20.0, 1.0);
         thr_spin.set_value(threshold_val.load(Ordering::Relaxed) as f64);
         thr_spin.connect_value_changed(clone!(#[strong] threshold_val, #[strong] auto_save, #[strong] rotation_enabled,
@@ -1026,7 +1026,7 @@ fn build_ui(app: &libadwaita::Application) {
         thr_row.append(&thr_label);
         thr_row.append(&thr_spin);
         options_grid.append(&thr_row);
-        let thr_desc = gtk4::Label::new(Some("Lower = stricter. Default 2 (near-identical). Up to 8 for similar images."));
+        let thr_desc = gtk4::Label::new(Some("Lower = stricter. Default 2 = near-identical only. Up to 8 for visually similar images."));
         thr_desc.set_css_classes(&["dim-label"]);
         thr_desc.set_margin_start(12);
         thr_desc.set_margin_bottom(6);
@@ -1084,6 +1084,11 @@ fn build_ui(app: &libadwaita::Application) {
                         let files: Vec<dedupe::ImageEntry> = gd.files.iter().map(|fd| dedupe::ImageEntry {
                             path: std::path::PathBuf::from(&fd.path),
                             size: fd.raw_size,
+                            // Hashes are intentionally omitted from export: they are
+                            // only meaningful during the current session and would be
+                            // misleading if the files change between export and import.
+                            // The import path (build_results) re-checks file existence
+                            // and marks missing files without needing hash values.
                             hash: 0,
                             rot_hashes: None,
                             low_variance: false,
@@ -1113,7 +1118,7 @@ fn build_ui(app: &libadwaita::Application) {
         #[strong] selection, #[strong] no_results_label, #[strong] scrolled,
         #[strong] toolbar_revealer, #[strong] move_sel_btn, #[strong] trash_sel_btn,
         #[strong] stats_label, #[strong] status_label, #[strong] progress_bar,
-        #[strong] ref_dirs, #[strong] per_file_refs, #[strong] options_popover,
+        #[strong] ref_dirs, #[strong] options_popover,
         #[strong] preview_widgets, move |_| {
         options_popover.popdown();
         let dialog = gtk4::FileDialog::new();
@@ -1131,7 +1136,6 @@ fn build_ui(app: &libadwaita::Application) {
         let sul = status_label.clone();
         let pb = progress_bar.clone();
         let rd2 = ref_dirs.clone();
-        let pfr = per_file_refs.clone();
         let w = window.clone();
         let pw = preview_widgets.clone();
         dialog.open(Some(&window), None::<&gtk4::gio::Cancellable>, move |result| {
@@ -1149,7 +1153,7 @@ fn build_ui(app: &libadwaita::Application) {
                                     let refs = rd2.lock().unwrap();
                                     build_results(&rbox, &rd, &sel, &groups, false,
                                         &dummy_progress, &stl, &sul, &pb, &tr, &mb, &tb,
-                                        &nol, &scr, &refs, &pfr, &w, &pw);
+                                        &nol, &scr, &refs, &w, &pw);
                                     stl.set_text(&format!("Imported {} groups", groups.len()));
                                 }
                                 Err(e) => {
@@ -1252,7 +1256,6 @@ fn build_ui(app: &libadwaita::Application) {
     // --- Scan handler ---
         scan_btn.connect_clicked(clone!(#[strong] dirs, #[strong] ref_dirs, #[strong] cancel_flag, 
         #[strong] pause_flag, #[strong] cache,
-        #[strong] per_file_refs,
         #[strong] results_box, #[strong] no_results_label,
         #[strong] scrolled, #[strong] progress_bar, #[strong] status_label, #[strong] toolbar_revealer,
         #[strong] scan_btn, #[strong] cancel_btn, #[strong] pause_btn, #[strong] stats_label,
@@ -1324,7 +1327,6 @@ fn build_ui(app: &libadwaita::Application) {
         let rd = results_data.clone();
         let sel = selection.clone();
         let ref_snapshot = ref_dirs.lock().unwrap().clone();
-        let timer_per_file = per_file_refs.clone();
         let timer_window = window.clone();
         let timer_preview = preview_widgets.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
@@ -1352,7 +1354,7 @@ fn build_ui(app: &libadwaita::Application) {
                         build_results(&timer_results_box, &rd, &sel, &groups,
                             was_cancelled, &timer_progress, &timer_stats, &timer_status,
                             &timer_bar, &timer_toolbar, &timer_move_btn, &timer_trash_btn,
-                            &timer_no_results, &timer_scrolled, &ref_snapshot, &timer_per_file,
+                            &timer_no_results, &timer_scrolled, &ref_snapshot,
                             &timer_window, &timer_preview);
                         timer_cancel_btn.set_sensitive(false);
                         timer_pause_btn.set_sensitive(false);
@@ -1603,7 +1605,12 @@ fn read_exif_string_tag(tiff: &[u8], ifd_off: usize, tag: u16, little_endian: bo
 }
 
 fn read_exif_model(path: &str) -> Option<String> {
-    let data = std::fs::read(path).ok()?;
+    // EXIF APP1 always appears within the first few KB of a JPEG; reading 64 KB
+    // is more than enough and avoids loading large raw/TIFF files entirely.
+    use std::io::Read;
+    let mut buf = vec![0u8; 65536];
+    let n = std::fs::File::open(path).ok()?.read(&mut buf).ok()?;
+    let data = &buf[..n];
     if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
         return None;
     }
@@ -1640,7 +1647,12 @@ fn read_exif_model(path: &str) -> Option<String> {
 }
 
 fn read_exif_date(path: &str) -> Option<String> {
-    let data = std::fs::read(path).ok()?;
+    // EXIF APP1 always appears within the first few KB of a JPEG; reading 64 KB
+    // is more than enough and avoids loading large raw/TIFF files entirely.
+    use std::io::Read;
+    let mut buf = vec![0u8; 65536];
+    let n = std::fs::File::open(path).ok()?.read(&mut buf).ok()?;
+    let data = &buf[..n];
     // Only attempt JPEG (SOI marker FF D8)
     if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
         return None;
@@ -1734,13 +1746,9 @@ fn build_results(results_box: &gtk4::Box,
     no_results_label: &gtk4::Label,
     scrolled: &gtk4::ScrolledWindow,
     ref_dirs: &HashSet<String>,
-    per_file_refs: &Arc<Mutex<HashSet<String>>>,
     window: &impl IsA<gtk4::Window>,
     preview_widgets: &Arc<Mutex<HashMap<String, PreviewFileWidgets>>>,
 ) {
-    let pfr_lock = per_file_refs.lock().unwrap();
-    let pfr_snapshot = pfr_lock.clone();
-    drop(pfr_lock);
     let pw_in_build = preview_widgets.clone();
     let total_duplicates: usize = groups.iter().map(|g| g.files.len()).sum();
     let total_groups = groups.len();
@@ -1813,7 +1821,7 @@ fn build_results(results_box: &gtk4::Box,
                 let rem = &path_str[d.len()..];
                 rem.is_empty() || rem.starts_with('/')
             });
-            let is_ref = dir_ref || pfr_snapshot.contains(&path_str);
+            let is_ref = dir_ref;
             let size_str = preview::format_size(entry.size);
             let res_str = image::image_dimensions(std::path::Path::new(&path_str))
                 .ok().map(|(w, h)| format!("{}x{}", w, h)).unwrap_or_default();
@@ -2031,6 +2039,7 @@ fn build_results(results_box: &gtk4::Box,
             let restored_row = row.clone();
             let restored_deleted = deleted_label.clone();
             let restored_trash = trash_btn.clone();
+            let restored_move = move_btn.clone();
             let restored_restore = restore_btn.clone();
             let rp = path_str.clone();
             let was_ref = is_ref;
@@ -2054,6 +2063,7 @@ fn build_results(results_box: &gtk4::Box,
                         sl_for_restore.set_text(&format!("Restored: {}", rp));
                         restored_deleted.set_visible(false);
                         restored_trash.set_visible(true);
+                        restored_move.set_visible(true);
                         restored_restore.set_visible(false);
                         if was_ref {
                             restored_row.set_css_classes(&["result-row", "ref-row"]);
@@ -2229,15 +2239,6 @@ fn apply_select_by(data: &[GroupData],
                         count += 1;
                     }
                 }
-                6 => {
-                    let has_ref = gd.files.iter().any(|f| f.reference);
-                    if has_ref {
-                        for fd in &non_ref {
-                            fd.check.set_active(true);
-                            count += 1;
-                        }
-                    }
-                }
                 _ => {}
             }
         }
@@ -2337,42 +2338,6 @@ fn load_pixbuf_scaled(path: &str, max_size: i32) -> Option<gdk_pixbuf::Pixbuf> {
     } else {
         Some(pixbuf)
     }
-}
-
-#[allow(dead_code)]
-fn move_single_file_with_label(
-    path: &str,
-    status_label: &gtk4::Label,
-    window: &impl IsA<gtk4::Window>,
-    moved_label: &gtk4::Label,
-    move_btn: &gtk4::Button,
-) {
-    let dialog = gtk4::FileDialog::new();
-    dialog.set_title("Select destination folder");
-    let p = path.to_owned();
-    let sl = status_label.clone();
-    let w = window.clone();
-    let ml = moved_label.clone();
-    let mb = move_btn.clone();
-    dialog.select_folder(Some(&w), None::<&gtk4::gio::Cancellable>, move |result| {
-        if let Ok(file) = result {
-            if let Some(dest) = file.path() {
-                let src = std::path::Path::new(&p);
-                let target = dest.join(src.file_name().unwrap_or_default());
-                if std::fs::rename(&p, &target).is_ok()
-                    || (std::fs::copy(&p, &target).is_ok() && std::fs::remove_file(&p).is_ok())
-                {
-                    let msg = format!("→ {}", target.display());
-                    sl.set_text(&format!("Moved to {}", target.display()));
-                    ml.set_text(&msg);
-                    ml.set_visible(true);
-                    mb.set_visible(false);
-                } else {
-                    sl.set_text(&format!("Failed to move: {}", p));
-                }
-            }
-        }
-    });
 }
 
 fn move_single_file_with_callback<F>(
@@ -2539,6 +2504,11 @@ fn show_group_preview(
 
     let monitors: std::rc::Rc<std::cell::RefCell<Vec<gtk4::gio::FileMonitor>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    // Wrapped in Cell<Option> so the Fn close_request closure can take/drop it
+    // on first call without needing to move out of the capture.
+    let monitors_holder = std::rc::Rc::new(std::cell::Cell::new(
+        Some(monitors.clone())
+    ));
 
     for (entry_idx, (path, is_ref)) in entries.iter().enumerate() {
         let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
@@ -2605,42 +2575,6 @@ fn show_group_preview(
         zoom_btn.set_css_classes(&["small", "flat"]);
         zoom_btn.set_halign(gtk4::Align::Center);
         zoom_btn.set_margin_top(4);
-        let zoom_paths = group_paths.clone();
-        let zoom_idx = entry_idx;
-        let mw_zoom = main_widgets.clone();
-        let sl_zoom = status_label.clone();
-        let zoom_clicked_path = path.clone();
-        let shared_deleted_for_zoom = shared_deleted.clone();
-        zoom_btn.connect_clicked(move |btn| {
-            if let Some(root) = btn.root() {
-                if let Some(parent_win) = root.downcast_ref::<gtk4::Window>() {
-                    let is_available = |p: &String| -> bool {
-                        if shared_deleted_for_zoom.borrow().contains(p.as_str()) {
-                            return false;
-                        }
-                        mw_zoom.get(p).map_or(true, |mw| {
-                            !mw.deleted_label.is_visible() && !mw.moved_label.is_visible()
-                        })
-                    };
-                    if !is_available(&zoom_clicked_path) {
-                        sl_zoom.set_text("Cannot zoom: file is unavailable");
-                        return;
-                    }
-                    let filtered: Vec<String> = zoom_paths.iter()
-                        .filter(|p| is_available(p))
-                        .cloned()
-                        .collect();
-                    if filtered.is_empty() {
-                        return;
-                    }
-                    let new_idx = zoom_paths[..zoom_idx].iter()
-                        .filter(|p| is_available(p))
-                        .count();
-                    let new_idx = new_idx.min(filtered.len() - 1);
-                    show_zoom_window(parent_win, &std::rc::Rc::new(filtered), new_idx, shared_deleted_for_zoom.clone());
-                }
-            }
-        });
         image_box.append(&zoom_btn);
 
         if *is_ref {
@@ -2785,8 +2719,13 @@ fn show_group_preview(
         let overlay_trash = status_overlay_box.clone();
         let icon_trash = status_icon.clone();
         let overlay_lbl_trash = status_overlay_label.clone();
+        let shared_deleted_trash = shared_deleted.clone();
         trash_btn.connect_clicked(move |_| {
             if trash::delete(&path_for_trash).is_ok() {
+                // Record that this path was trashed via our button so that
+                // the FileMonitor (and focus-recheck) can show "Moved to trash"
+                // rather than "File not found".
+                shared_deleted_trash.borrow_mut().insert(path_for_trash.clone());
                 sl2.set_text(&format!("Trashed: {}", path_for_trash));
                 // Switch thumbnail to trash icon
                 picture_trash.set_visible(false);
@@ -2858,6 +2797,7 @@ fn show_group_preview(
                     if let Some(w) = mw_restore.get(&rp) {
                         w.deleted_label.set_visible(false);
                         w.trash_btn.set_visible(true);
+                        w.move_btn.set_visible(true);
                         w.restore_btn.set_visible(false);
                         if w.reference {
                             w.row.set_css_classes(&["result-row", "ref-row"]);
@@ -2927,6 +2867,85 @@ fn show_group_preview(
                 rmb_sl.set_text(&format!("Failed to restore: {}", dest));
             }
         });
+
+        // Wire up zoom_btn now that trash_btn, restore_btn are in scope
+        {
+            let zoom_paths = group_paths.clone();
+            let zoom_idx = entry_idx;
+            let mw_zoom = main_widgets.clone();
+            let sl_zoom = status_label.clone();
+            let zoom_clicked_path = path.clone();
+            let shared_deleted_for_zoom = shared_deleted.clone();
+            let ot_picture = picture.clone();
+            let ot_overlay = status_overlay_box.clone();
+            let ot_icon = status_icon.clone();
+            let ot_lbl = status_overlay_label.clone();
+            let ot_trash_btn = trash_btn.clone();
+            let ot_restore_btn = restore_btn.clone();
+            let ot_zoom_btn = zoom_btn.clone();
+            let ot_mw = main_widgets.clone();
+            zoom_btn.connect_clicked(move |btn| {
+                if let Some(root) = btn.root() {
+                    if let Some(parent_win) = root.downcast_ref::<gtk4::Window>() {
+                        let is_available = |p: &String| -> bool {
+                            if shared_deleted_for_zoom.borrow().contains(p.as_str()) {
+                                return false;
+                            }
+                            mw_zoom.get(p).map_or(true, |mw| {
+                                !mw.deleted_label.is_visible() && !mw.moved_label.is_visible()
+                            })
+                        };
+                        if !is_available(&zoom_clicked_path) {
+                            sl_zoom.set_text("Cannot zoom: file is unavailable");
+                            return;
+                        }
+                        let filtered: Vec<String> = zoom_paths.iter()
+                            .filter(|p| is_available(p))
+                            .cloned()
+                            .collect();
+                        if filtered.is_empty() {
+                            return;
+                        }
+                        let new_idx = zoom_paths[..zoom_idx].iter()
+                            .filter(|p| is_available(p))
+                            .count();
+                        let new_idx = new_idx.min(filtered.len() - 1);
+                        let ot_pic2 = ot_picture.clone();
+                        let ot_ov2 = ot_overlay.clone();
+                        let ot_ic2 = ot_icon.clone();
+                        let ot_lb2 = ot_lbl.clone();
+                        let ot_tb2 = ot_trash_btn.clone();
+                        let ot_rb2 = ot_restore_btn.clone();
+                        let ot_zb2 = ot_zoom_btn.clone();
+                        let ot_mw2 = ot_mw.clone();
+                        show_zoom_window(parent_win, &std::rc::Rc::new(filtered), new_idx,
+                            shared_deleted_for_zoom.clone(),
+                            move |trashed_path| {
+                                // Sync group-preview overlay for this entry
+                                ot_pic2.set_visible(false);
+                                ot_ic2.set_icon_name(Some("user-trash-symbolic"));
+                                ot_lb2.set_text("Moved to trash");
+                                ot_ov2.set_visible(true);
+                                ot_tb2.set_visible(false);
+                                ot_rb2.set_visible(true);
+                                ot_zb2.set_sensitive(false);
+                                // Sync main-window FileData
+                                if let Some(w) = ot_mw2.get(&trashed_path) {
+                                    w.deleted_label.set_visible(true);
+                                    w.trash_btn.set_visible(false);
+                                    w.move_btn.set_visible(false);
+                                    w.restore_btn.set_visible(true);
+                                    if w.reference {
+                                        w.row.set_css_classes(&["deleted", "ref-row"]);
+                                    } else {
+                                        w.row.set_css_classes(&["deleted"]);
+                                    }
+                                }
+                            });
+                    }
+                }
+            });
+        }
 
         actions_box.append(&move_btn);
         actions_box.append(&trash_btn);
@@ -3052,7 +3071,9 @@ fn show_group_preview(
 
     let preview_paths: Vec<String> = entries.iter().map(|(p,_)| p.clone()).collect();
     let pw_cleanup = preview_widgets.clone();
+    // Take the monitors Rc out on first close, dropping all FileMonitors.
     window.connect_close_request(move |_| {
+        drop(monitors_holder.take());
         let mut map = pw_cleanup.lock().unwrap();
         for p in &preview_paths {
             map.remove(p);
@@ -3116,6 +3137,7 @@ fn show_zoom_window(
     paths: &std::rc::Rc<Vec<String>>,
     start_index: usize,
     deleted_paths: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
+    on_trash: impl Fn(String) + 'static,
 ) {
     let window = gtk4::Window::new();
     window.set_transient_for(Some(parent));
@@ -3333,6 +3355,7 @@ fn show_zoom_window(
         let window = window.clone();
         let update = update_view.clone();
         let deleted_paths = deleted_paths.clone();
+        let on_trash = std::rc::Rc::new(on_trash);
         delete_btn.connect_clicked(move |_| {
             let idx = current_index.get();
             let path = paths[idx].clone();
@@ -3347,11 +3370,15 @@ fn show_zoom_window(
             dialog.set_close_response("cancel");
             let deleted_paths2 = deleted_paths.clone();
             let update2 = update.clone();
+            let on_trash2 = on_trash.clone();
             dialog.connect_response(None, move |_dlg, resp| {
                 if resp == "trash" {
                     match trash::delete(&path) {
                         Ok(()) => {
                             deleted_paths2.borrow_mut().insert(path.clone());
+                            // Sync group-preview and main-window widgets immediately,
+                            // before the FileMonitor fires (which may race the insert).
+                            on_trash2(path.clone());
                         }
                         Err(e) => {
                             eprintln!("Warning: Failed to trash {:?}: {}", path, e);
