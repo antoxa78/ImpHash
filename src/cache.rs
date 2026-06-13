@@ -67,6 +67,7 @@ impl HashCache {
     }
 
     #[cfg(feature = "pdq")]
+    #[allow(dead_code)]
     pub fn lookup_pdq(&self, path: &Path, mtime: u64, size: u64) -> Option<String> {
         let map = self.inner.lock().unwrap();
         let key = path_key(path);
@@ -80,6 +81,7 @@ impl HashCache {
     }
 
     #[cfg(feature = "pdq")]
+    #[allow(dead_code)]
     pub fn insert_pdq(&self, path: &Path, mtime: u64, size: u64, hash: u64, pdq_hex: &str) {
         let mut map = self.inner.lock().unwrap();
         let entry = map.entry(path_key(path)).or_insert(CacheEntry {

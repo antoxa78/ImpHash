@@ -1,0 +1,6 @@
+Then: cargo build --release --features heif for full support, or cargo build --release for everything except HEIC/HEIF.
+
+
+# Everything:
+cargo build --release --features heif,pdq
+apt install libdav1d-dev

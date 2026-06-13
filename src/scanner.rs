@@ -3,7 +3,38 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "bmp", "gif", "webp", "tiff", "tif",
+    // JPEG
+    "jpg", "jpeg",
+    // PNG
+    "png",
+    // WebP
+    "webp",
+    // AVIF (decoded via image crate avif-native feature — requires libdav1d)
+    "avif",
+    // TIFF
+    "tiff", "tif",
+    // BMP
+    "bmp",
+    // GIF
+    "gif",
+    // HDR (Radiance RGBE)
+    "hdr",
+    // OpenEXR
+    "exr",
+    // TGA (Truevision)
+    "tga",
+    // ICO (Windows icon)
+    "ico",
+    // PNM family
+    "pbm", "pgm", "ppm", "pam",
+    // QOI (Quite OK Image)
+    "qoi",
+    // Farbfeld
+    "ff",
+    // DDS (DirectDraw Surface)
+    "dds",
+    // HEIC / HEIF (decoded via libheif-rs, requires 'heif' feature)
+    "heic", "heif",
 ];
 
 fn find_images(path: &Path) -> Result<Vec<PathBuf>> {

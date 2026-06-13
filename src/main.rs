@@ -5,6 +5,7 @@ mod dedupe;
 mod preview;
 mod cache;
 mod settings;
+mod formats;
 
 // Build information - update these with each release
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -1774,15 +1775,15 @@ fn build_results(results_box: &gtk4::Box,
         };
         let ch_date = gtk4::Label::new(Some("Date Taken"));
         ch_date.set_css_classes(&["column-header"]);
-        ch_date.set_size_request(150, -1);
+        ch_date.set_width_chars(19);
         ch_date.set_halign(gtk4::Align::Start);
         let ch_res = gtk4::Label::new(Some("Resolution"));
         ch_res.set_css_classes(&["column-header"]);
-        ch_res.set_size_request(100, -1);
+        ch_res.set_width_chars(12);
         ch_res.set_halign(gtk4::Align::Start);
         let ch_size = gtk4::Label::new(Some("Size"));
         ch_size.set_css_classes(&["column-header"]);
-        ch_size.set_size_request(80, -1);
+        ch_size.set_width_chars(10);
         ch_size.set_halign(gtk4::Align::Start);
         let ch_actions = gtk4::Label::new(Some("Actions"));
         ch_actions.set_css_classes(&["column-header"]);
@@ -1830,15 +1831,15 @@ fn build_results(results_box: &gtk4::Box,
             name_label.set_halign(gtk4::Align::Start);
             let res_label = gtk4::Label::new(Some(&res_str));
             res_label.set_css_classes(&["dim-label"]);
-            res_label.set_size_request(100, -1);
+            res_label.set_width_chars(12);
             res_label.set_halign(gtk4::Align::Start);
             let size_label = gtk4::Label::new(Some(&size_str));
             size_label.set_css_classes(&["dim-label"]);
-            size_label.set_size_request(80, -1);
+            size_label.set_width_chars(10);
             size_label.set_halign(gtk4::Align::Start);
             let date_label = gtk4::Label::new(Some(&date_str));
             date_label.set_css_classes(&["dim-label"]);
-            date_label.set_size_request(150, -1);
+            date_label.set_width_chars(19);
             date_label.set_halign(gtk4::Align::Start);
             let move_btn = btn_icon_text("Move", "go-jump-symbolic");
             move_btn.set_css_classes(&["small"]);
@@ -2531,6 +2532,11 @@ fn show_group_preview(
         entries.iter().map(|(p, _)| p.clone()).collect()
     );
 
+    // Shared deleted-paths set passed into zoom window so files trashed from
+    // zoom are visible here when the group preview regains focus.
+    let shared_deleted: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<String>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new()));
+
     let monitors: std::rc::Rc<std::cell::RefCell<Vec<gtk4::gio::FileMonitor>>> =
         std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
 
@@ -2604,16 +2610,20 @@ fn show_group_preview(
         let mw_zoom = main_widgets.clone();
         let sl_zoom = status_label.clone();
         let zoom_clicked_path = path.clone();
+        let shared_deleted_for_zoom = shared_deleted.clone();
         zoom_btn.connect_clicked(move |btn| {
             if let Some(root) = btn.root() {
                 if let Some(parent_win) = root.downcast_ref::<gtk4::Window>() {
                     let is_available = |p: &String| -> bool {
+                        if shared_deleted_for_zoom.borrow().contains(p.as_str()) {
+                            return false;
+                        }
                         mw_zoom.get(p).map_or(true, |mw| {
                             !mw.deleted_label.is_visible() && !mw.moved_label.is_visible()
                         })
                     };
                     if !is_available(&zoom_clicked_path) {
-                        sl_zoom.set_text("Cannot zoom: file was moved to trash");
+                        sl_zoom.set_text("Cannot zoom: file is unavailable");
                         return;
                     }
                     let filtered: Vec<String> = zoom_paths.iter()
@@ -2627,7 +2637,7 @@ fn show_group_preview(
                         .filter(|p| is_available(p))
                         .count();
                     let new_idx = new_idx.min(filtered.len() - 1);
-                    show_zoom_window(parent_win, &std::rc::Rc::new(filtered), new_idx);
+                    show_zoom_window(parent_win, &std::rc::Rc::new(filtered), new_idx, shared_deleted_for_zoom.clone());
                 }
             }
         });
@@ -2811,6 +2821,7 @@ fn show_group_preview(
         let trash_btn_restore = trash_btn.clone();
         let restore_btn_ref = restore_btn.clone();
         let moved_to_lbl_restore = moved_to_label.clone();
+        let shared_deleted_restore = shared_deleted.clone();
         restore_btn.connect_clicked(move |_| {
             let items = match trash::os_limited::list() {
                 Ok(items) => items,
@@ -2829,6 +2840,7 @@ fn show_group_preview(
             }
             match trash::os_limited::restore_all(to_restore) {
                 Ok(()) => {
+                    shared_deleted_restore.borrow_mut().remove(&rp);
                     sl_restore.set_text(&format!("Restored: {}", rp));
                     // Reload thumbnail (may not have been loaded if file was trashed)
                     if let Some(pixbuf) = load_pixbuf_scaled(&rp, 1200) {
@@ -2985,8 +2997,10 @@ fn show_group_preview(
         let move_btn_mon = move_btn.clone();
         let trash_btn_mon = trash_btn.clone();
         let zoom_btn_mon = zoom_btn.clone();
+        let restore_btn_mon = restore_btn.clone();
         let mw_mon = main_widgets.clone();
         let path_mw_mon = path.clone();
+        let shared_deleted_mon = shared_deleted.clone();
         let mons = monitors.clone();
         let file = gtk4::gio::File::for_path(&path_mon);
         if let Ok(monitor) = file.monitor_file(gtk4::gio::FileMonitorFlags::WATCH_MOVES, None::<&gtk4::gio::Cancellable>) {
@@ -2996,19 +3010,29 @@ fn show_group_preview(
                     | gtk4::gio::FileMonitorEvent::Renamed
                     | gtk4::gio::FileMonitorEvent::MovedOut
                 ) {
+                    let trashed_from_zoom = shared_deleted_mon.borrow().contains(&path_mon);
                     pic_mon.set_visible(false);
-                    icon_mon.set_icon_name(Some("image-missing-symbolic"));
-                    lbl_mon.set_text("File not found");
                     ov_mon.set_visible(true);
                     move_btn_mon.set_visible(false);
                     trash_btn_mon.set_visible(false);
                     zoom_btn_mon.set_sensitive(false);
+                    if trashed_from_zoom {
+                        icon_mon.set_icon_name(Some("user-trash-symbolic"));
+                        lbl_mon.set_text("Moved to trash");
+                        restore_btn_mon.set_visible(true);
+                    } else {
+                        icon_mon.set_icon_name(Some("image-missing-symbolic"));
+                        lbl_mon.set_text("File not found");
+                    }
                     // Sync main window
                     if let Some(w) = mw_mon.get(&path_mw_mon) {
-                        w.deleted_label.set_text("File not found");
+                        w.deleted_label.set_text(if trashed_from_zoom { "Moved to trash" } else { "File not found" });
                         w.deleted_label.set_visible(true);
                         w.trash_btn.set_visible(false);
                         w.move_btn.set_visible(false);
+                        if trashed_from_zoom {
+                            w.restore_btn.set_visible(true);
+                        }
                         if w.reference {
                             w.row.set_css_classes(&["deleted", "ref-row"]);
                         } else {
@@ -3041,27 +3065,38 @@ fn show_group_preview(
     let focus_paths: Vec<String> = entries.iter().map(|(p,_)| p.clone()).collect();
     let pw_focus = preview_widgets.clone();
     let mw_focus = main_widgets.clone();
+    let shared_del_focus = shared_deleted.clone();
     window.connect_is_active_notify(move |_win| {
         let map = pw_focus.lock().unwrap();
         for path in &focus_paths {
             let exists = std::path::Path::new(path).exists();
             if !exists {
+                let trashed_from_zoom = shared_del_focus.borrow().contains(path.as_str());
                 if let Some(pw) = map.get(path) {
                     if !pw.status_overlay_box.is_visible() {
                         pw.picture.set_visible(false);
-                        pw.status_icon.set_icon_name(Some("image-missing-symbolic"));
-                        pw.status_overlay_label.set_text("File not found");
                         pw.status_overlay_box.set_visible(true);
                         pw.move_btn.set_visible(false);
                         pw.trash_btn.set_visible(false);
+                        if trashed_from_zoom {
+                            pw.status_icon.set_icon_name(Some("user-trash-symbolic"));
+                            pw.status_overlay_label.set_text("Moved to trash");
+                            pw.restore_btn.set_visible(true);
+                        } else {
+                            pw.status_icon.set_icon_name(Some("image-missing-symbolic"));
+                            pw.status_overlay_label.set_text("File not found");
+                        }
                     }
                 }
                 if let Some(w) = mw_focus.get(path) {
                     if !w.deleted_label.is_visible() && !w.moved_label.is_visible() {
-                        w.deleted_label.set_text("File not found");
+                        w.deleted_label.set_text(if trashed_from_zoom { "Moved to trash" } else { "File not found" });
                         w.deleted_label.set_visible(true);
                         w.trash_btn.set_visible(false);
                         w.move_btn.set_visible(false);
+                        if trashed_from_zoom {
+                            w.restore_btn.set_visible(true);
+                        }
                         if w.reference {
                             w.row.set_css_classes(&["deleted", "ref-row"]);
                         } else {
@@ -3076,7 +3111,12 @@ fn show_group_preview(
     window.present();
 }
 
-fn show_zoom_window(parent: &gtk4::Window, paths: &std::rc::Rc<Vec<String>>, start_index: usize) {
+fn show_zoom_window(
+    parent: &gtk4::Window,
+    paths: &std::rc::Rc<Vec<String>>,
+    start_index: usize,
+    deleted_paths: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
+) {
     let window = gtk4::Window::new();
     window.set_transient_for(Some(parent));
     window.set_default_size(1200, 900);
@@ -3085,6 +3125,9 @@ fn show_zoom_window(parent: &gtk4::Window, paths: &std::rc::Rc<Vec<String>>, sta
     let current_index = std::rc::Rc::new(std::cell::Cell::new(start_index));
     let paths = paths.clone();
     let total = paths.len();
+    // Tracks files deleted externally (not via our Delete button).
+    let missing_paths: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<String>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new()));
 
     let overlay = gtk4::Overlay::new();
 
@@ -3101,6 +3144,20 @@ fn show_zoom_window(parent: &gtk4::Window, paths: &std::rc::Rc<Vec<String>>, sta
 
     scrolled.set_child(Some(&picture));
     overlay.set_child(Some(&scrolled));
+
+    // "Deleted/Missing" overlay — shown in place of the image after trashing or external delete
+    let deleted_overlay_box = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+    deleted_overlay_box.set_halign(gtk4::Align::Center);
+    deleted_overlay_box.set_valign(gtk4::Align::Center);
+    deleted_overlay_box.set_visible(false);
+    let deleted_icon = gtk4::Image::new();
+    deleted_icon.set_pixel_size(64);
+    deleted_icon.add_css_class("dim-label");
+    let deleted_label = gtk4::Label::new(None);
+    deleted_label.add_css_class("dim-label");
+    deleted_overlay_box.append(&deleted_icon);
+    deleted_overlay_box.append(&deleted_label);
+    overlay.add_overlay(&deleted_overlay_box);
 
     // Bottom bar: two rows — metadata info on top, controls below
     let bottom_bar = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
@@ -3133,6 +3190,9 @@ fn show_zoom_window(parent: &gtk4::Window, paths: &std::rc::Rc<Vec<String>>, sta
     path_label.set_hexpand(true);
     path_label.set_halign(gtk4::Align::Fill);
 
+    let delete_btn = btn_icon_text("Delete", "user-trash-symbolic");
+    delete_btn.set_css_classes(&["small", "destructive-action"]);
+
     let open_btn = btn_icon_text("Open", "document-open-symbolic");
     open_btn.set_css_classes(&["small"]);
 
@@ -3142,6 +3202,7 @@ fn show_zoom_window(parent: &gtk4::Window, paths: &std::rc::Rc<Vec<String>>, sta
     controls_row.append(&prev_btn);
     controls_row.append(&counter_label);
     controls_row.append(&path_label);
+    controls_row.append(&delete_btn);
     controls_row.append(&open_btn);
     controls_row.append(&next_btn);
 
@@ -3159,35 +3220,63 @@ fn show_zoom_window(parent: &gtk4::Window, paths: &std::rc::Rc<Vec<String>>, sta
         let meta_label = meta_label.clone();
         let prev_btn = prev_btn.clone();
         let next_btn = next_btn.clone();
+        let delete_btn = delete_btn.clone();
+        let open_btn = open_btn.clone();
         let window = window.clone();
         let paths = paths.clone();
         let current_index = current_index.clone();
+        let deleted_paths = deleted_paths.clone();
+        let missing_paths = missing_paths.clone();
+        let deleted_overlay_box = deleted_overlay_box.clone();
+        let deleted_icon = deleted_icon.clone();
+        let deleted_label = deleted_label.clone();
         move || {
             let idx = current_index.get();
             let path = &paths[idx];
+            let is_trashed = deleted_paths.borrow().contains(path.as_str());
+            let is_missing = missing_paths.borrow().contains(path.as_str());
             // Update title
             let fname = std::path::Path::new(path).file_name()
                 .and_then(|n| n.to_str()).unwrap_or(path);
             window.set_title(Some(&format!("Zoom — {}", fname)));
-            // Update image
-            if let Ok(pixbuf) = gdk_pixbuf::Pixbuf::from_file(path) {
-                picture.set_paintable(Some(&gtk4::gdk::Texture::for_pixbuf(&pixbuf)));
+            if is_trashed || is_missing {
+                // Show appropriate overlay, hide image
+                picture.set_paintable(None::<&gtk4::gdk::Texture>);
+                if is_trashed {
+                    deleted_icon.set_icon_name(Some("user-trash-full-symbolic"));
+                    deleted_label.set_text("Image moved to trash");
+                } else {
+                    deleted_icon.set_icon_name(Some("image-missing-symbolic"));
+                    deleted_label.set_text("File not found");
+                }
+                deleted_overlay_box.set_visible(true);
+                meta_label.set_text("");
+                delete_btn.set_sensitive(false);
+                open_btn.set_sensitive(false);
+            } else {
+                deleted_overlay_box.set_visible(false);
+                delete_btn.set_sensitive(true);
+                open_btn.set_sensitive(true);
+                // Update image
+                if let Ok(pixbuf) = gdk_pixbuf::Pixbuf::from_file(path) {
+                    picture.set_paintable(Some(&gtk4::gdk::Texture::for_pixbuf(&pixbuf)));
+                }
+                // Update metadata
+                let mut meta_parts: Vec<String> = Vec::new();
+                if let Some(d) = read_exif_date(path) {
+                    meta_parts.push(d);
+                }
+                if let Some(m) = read_exif_model(path) {
+                    meta_parts.push(m);
+                }
+                if let Ok((w, h)) = image::image_dimensions(std::path::Path::new(path)) {
+                    meta_parts.push(format!("{}×{}", w, h));
+                }
+                if let Ok(m) = std::fs::metadata(path) {
+                    meta_parts.push(preview::format_size(m.len()));
+                }
+                meta_label.set_text(&meta_parts.join("  ·  "));
             }
-            // Update metadata
-            let mut meta_parts: Vec<String> = Vec::new();
-            if let Some(d) = read_exif_date(path) {
-                meta_parts.push(d);
-            }
-            if let Some(m) = read_exif_model(path) {
-                meta_parts.push(m);
-            }
-            if let Ok((w, h)) = image::image_dimensions(std::path::Path::new(path)) {
-                meta_parts.push(format!("{}×{}", w, h));
-            }
-            if let Ok(m) = std::fs::metadata(path) {
-                meta_parts.push(preview::format_size(m.len()));
-            }
-            meta_label.set_text(&meta_parts.join("  ·  "));
             // Update labels
             path_label.set_text(path);
             counter_label.set_text(&format!("{} / {}", idx + 1, total));
@@ -3199,6 +3288,82 @@ fn show_zoom_window(parent: &gtk4::Window, paths: &std::rc::Rc<Vec<String>>, sta
 
     // Initial load
     update_view();
+
+    // File monitors: one per path — detect external deletions (e.g. from image viewer)
+    // and show the "File not found" overlay immediately.
+    let monitors: std::rc::Rc<std::cell::RefCell<Vec<gtk4::gio::FileMonitor>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    for p in paths.iter() {
+        let file = gtk4::gio::File::for_path(p);
+        if let Ok(mon) = file.monitor_file(
+            gtk4::gio::FileMonitorFlags::WATCH_MOVES,
+            None::<&gtk4::gio::Cancellable>,
+        ) {
+            let missing_paths_mon = missing_paths.clone();
+            let deleted_paths_mon = deleted_paths.clone();
+            let update_mon = update_view.clone();
+            let path_mon = p.clone();
+            mon.connect_changed(move |_mon, _file, _other, event| {
+                // Only react if not already marked (avoid double-trigger)
+                let already_known = deleted_paths_mon.borrow().contains(&path_mon)
+                    || missing_paths_mon.borrow().contains(&path_mon);
+                if !already_known && matches!(
+                    event,
+                    gtk4::gio::FileMonitorEvent::Deleted
+                    | gtk4::gio::FileMonitorEvent::Renamed
+                    | gtk4::gio::FileMonitorEvent::MovedOut
+                ) {
+                    missing_paths_mon.borrow_mut().insert(path_mon.clone());
+                    update_mon();
+                }
+            });
+            monitors.borrow_mut().push(mon);
+        }
+    }
+    // Keep monitors alive until window closes
+    window.connect_close_request(move |_| {
+        monitors.borrow_mut().clear();
+        glib::Propagation::Proceed
+    });
+
+    // Delete button — moves current image to trash, marks slot as deleted
+    {
+        let paths = paths.clone();
+        let current_index = current_index.clone();
+        let window = window.clone();
+        let update = update_view.clone();
+        let deleted_paths = deleted_paths.clone();
+        delete_btn.connect_clicked(move |_| {
+            let idx = current_index.get();
+            let path = paths[idx].clone();
+            let dialog = libadwaita::AlertDialog::new(
+                Some("Move to Trash?"),
+                Some(&path),
+            );
+            dialog.add_response("cancel", "Cancel");
+            dialog.add_response("trash", "Move to Trash");
+            dialog.set_response_appearance("trash", libadwaita::ResponseAppearance::Destructive);
+            dialog.set_default_response(Some("cancel"));
+            dialog.set_close_response("cancel");
+            let deleted_paths2 = deleted_paths.clone();
+            let update2 = update.clone();
+            dialog.connect_response(None, move |_dlg, resp| {
+                if resp == "trash" {
+                    match trash::delete(&path) {
+                        Ok(()) => {
+                            deleted_paths2.borrow_mut().insert(path.clone());
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to trash {:?}: {}", path, e);
+                        }
+                    }
+                    // Stay on current index — update_view will show the deleted overlay
+                    update2();
+                }
+            });
+            dialog.present(Some(&window));
+        });
+    }
 
     // Open button
     {

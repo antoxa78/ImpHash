@@ -1,6 +1,6 @@
 [package]
 name = "imphash"
-version = "1.1.5"
+version = "1.1.6"
 edition = "2021"
 
 [dependencies]
@@ -8,11 +8,12 @@ gtk4 = { version = "0.9", features = ["v4_12"] }
 libadwaita = { version = "0.7", features = ["v1_5"] }
 gdk-pixbuf = "0.20"
 glib = "0.20"
-image = "0.25.10"
+image = { version = "0.25.10", features = ["avif-native"] }
 walkdir = "2"
 rayon = "1"
 anyhow = "1"
 trash = "5"
+libheif-rs = { version = "2.7", features = ["embedded-libheif"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 pdq-rs = { version = "1.0", optional = true }
@@ -25,3 +26,29 @@ chrono = "0.4"
 [features]
 default = []
 pdq = ["dep:pdq-rs"]
+heif = ["dep:libheif-rs"]
+
+[package.metadata.deb]
+name = "imphash"
+maintainer = "antoxa78"
+copyright = "2026 antoxa78"
+license-file = ["LICENSE", "0"]
+extended-description = """
+ImpHash — Duplicate Image Finder.
+Finds near-duplicate images using perceptual hashing (dHash).
+Supports JPEG, PNG, WebP, AVIF, TIFF, BMP, GIF, HDR, EXR,
+TGA, ICO, PNM, QOI, DDS, HEIC/HEIF and more.
+"""
+section = "graphics"
+priority = "optional"
+# libdav1d: required for AVIF decoding (avif-native feature).
+# '|' means either version satisfies the dep — Ubuntu 24.04 ships libdav1d7,
+# older distros ship libdav1d6.
+# libheif is compiled statically via embedded-libheif — no runtime dep needed.
+# GTK4/Adwaita are always present on a GNOME desktop but listed for bare installs.
+depends = "libdav1d7 | libdav1d6, libgtk-4-1, libadwaita-1-0, libgdk-pixbuf-2.0-0"
+assets = [
+    ["target/release/imphash",  "usr/bin/imphash",                                    "755"],
+    ["assets/imphash.desktop",  "usr/share/applications/imphash.desktop",             "644"],
+    ["assets/icons/imphash.png","usr/share/icons/hicolor/256x256/apps/imphash.png",   "644"],
+]

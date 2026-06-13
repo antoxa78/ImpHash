@@ -11,7 +11,7 @@ fn open_image_timeout(path: &Path, cancel: &AtomicBool) -> Result<image::Dynamic
     let path_for_err = path_buf.clone();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(image::open(&path_buf));
+        let _ = tx.send(crate::formats::open_image(&path_buf));
     });
     loop {
         if cancel.load(Ordering::Relaxed) {

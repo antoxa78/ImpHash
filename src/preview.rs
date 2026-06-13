@@ -11,7 +11,7 @@ fn open_image_timeout(path: &Path) -> Result<image::DynamicImage> {
     let path_for_err = path.clone();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(image::open(&path));
+        let _ = tx.send(crate::formats::open_image(&path));
     });
     match rx.recv_timeout(DECODE_TIMEOUT) {
         Ok(result) => Ok(result?),
