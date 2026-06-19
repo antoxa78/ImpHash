@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=ImpHash
-Comment=Find similar images using perceptual hashing
-Exec=imphash
-Icon=imphash
-Categories=Graphics;
-Terminal=false
-StartupNotify=true

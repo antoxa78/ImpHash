@@ -103,6 +103,7 @@ fn add_dir_row(
     rotation_enabled: &Arc<AtomicBool>,
     threshold_val: &Arc<AtomicU32>,
     select_by_btn: &gtk4::MenuButton,
+    no_ref_filter_btn: &gtk4::ToggleButton,
 ) {
     let mut d = dirs.lock().unwrap();
     if d.contains(&path.to_string()) { return; }
@@ -127,6 +128,7 @@ fn add_dir_row(
     let dirs3 = dirs.clone();
     let refs4 = ref_dirs.clone();
     let sbb = select_by_btn.clone();
+    let nrf = no_ref_filter_btn.clone();
     let dir_list2 = dir_list.clone();
     ref_cb.connect_toggled(move |cb| {
         if cb.is_active() {
@@ -155,11 +157,15 @@ fn add_dir_row(
             }
             dir_lbl.set_css_classes(&["ref-path"]);
             sbb.set_visible(false);
+            nrf.set_visible(true);
+            nrf.set_active(false);
         } else {
             let mut rd = dir_refs.lock().unwrap();
             rd.remove(&dtext);
             dir_lbl.set_css_classes(&[]);
             sbb.set_visible(rd.is_empty());
+            nrf.set_visible(!rd.is_empty());
+            nrf.set_active(false);
             drop(rd);
         }
         refresh_all_ref_styling(&rd_for_refresh, &rd_for_refresh2);
@@ -247,9 +253,10 @@ fn build_ui(app: &libadwaita::Application) {
 
     let provider = gtk4::CssProvider::new();
     provider.load_from_string(
-        ".ref-row { background: alpha(@accent_color, 0.08); border-left: 3px solid @accent_color; padding-left: 3px; }\
-         .ref-image { border: 3px solid @accent_color; border-radius: 6px; }\
-         .ref-path { color: @accent_color; font-weight: 600; }\
+         ".ref-row { background: alpha(@accent_color, 0.08); border-left: 3px solid @accent_color; padding-left: 3px; }\
+          .ref-image { border: 3px solid @success_color; border-radius: 6px; }\
+          .ref-label-green { color: @success_color; font-weight: 600; }\
+          .ref-path { color: @accent_color; font-weight: 600; }\
          .dir-list { border: 1px solid @borders; border-radius: 6px; background: @card_bg_color; }\
          .error { color: @error_color; font-weight: bold; }\
          .deleted { background: alpha(@error_color, 0.08); border-left: 3px solid @error_color; padding-left: 3px; }\
@@ -262,18 +269,19 @@ fn build_ui(app: &libadwaita::Application) {
          .moved .dim-label { color: alpha(@success_color, 0.6); }\
          .group-frame { border: 1px solid @borders; border-radius: 8px; background: @card_bg_color; transition: all 150ms ease; }\
          .group-frame:hover { border-color: alpha(@accent_color, 0.3); box-shadow: 0 1px 4px alpha(black, 0.08); }\
-         .result-row { padding: 4px 6px; padding-left: 9px; border-radius: 4px; transition: background 100ms ease; }\
+         .result-row { padding: 5px 8px; padding-left: 9px; border-radius: 4px; transition: background 100ms ease; border-bottom: 1px solid alpha(@borders, 0.25); }\
+         .result-row:last-child { border-bottom: none; }\
          .result-row:hover { background: alpha(@accent_color, 0.04); }\
          .result-row:selected { background: alpha(@accent_color, 0.1); }\
          .toolbar-box { background: @card_bg_color; border: 1px solid @borders; border-radius: 8px; padding: 6px 8px; }\
          .progress trough { min-height: 8px; border-radius: 4px; }\
          .progress progress { border-radius: 4px; }\
          .group-header-btn { margin: 0 2px; }\
-         .group-header { background: alpha(@accent_color, 0.03); border-bottom: 1px solid @borders; padding: 4px 0; }\
-         .column-header { font-weight: 600; font-size: 0.85em; color: @insensitive_fg_color; padding: 2px 6px; }\
-         .col-header-row { border-bottom: 1px solid alpha(@borders, 0.7); margin-bottom: 2px; padding: 2px 6px; padding-left: 9px; }\
+         .group-header { background: alpha(@accent_color, 0.04); border-bottom: 1px solid alpha(@accent_color, 0.15); padding: 6px 0; }\
+          .column-header { font-weight: 600; color: @insensitive_fg_color; padding: 2px 6px; }\
+         .col-header-row { background: alpha(@accent_color, 0.04); border-bottom: 2px solid alpha(@accent_color, 0.15); margin-bottom: 4px; padding: 4px 6px; padding-left: 9px; border-radius: 4px 4px 0 0; }\
          .status-pill { background: alpha(@accent_color, 0.08); border-radius: 12px; padding: 2px 10px; font-weight: 600; }\
-         .status-pill-ref { background: alpha(@accent_color, 0.15); color: @accent_color; border-radius: 12px; padding: 2px 10px; font-weight: 600; font-size: 0.85em; }\
+         .status-pill-ref { background: alpha(@success_color, 0.12); color: @success_color; border-radius: 10px; padding: 2px 8px; font-weight: 600; font-size: 0.8em; }\
          .status-pill-rot { background: alpha(@warning_color, 0.15); color: @warning_color; border-radius: 12px; padding: 2px 10px; font-weight: 600; font-size: 0.85em; }\
          viewport, scrolledwindow, list, box { border: none; background: transparent; }\
          .card { background: @card_bg_color; border: 1px solid @borders; border-radius: 8px; padding: 8px; transition: all 150ms ease; }\
@@ -287,6 +295,9 @@ fn build_ui(app: &libadwaita::Application) {
     );
     if let Some(display) = gtk4::gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(&display, &provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
+        // Register icon search path so "imphash" icon name resolves
+        let icon_theme = gtk4::IconTheme::for_display(&display);
+        icon_theme.add_search_path("assets/icons");
     }
 
     // --- Window ---
@@ -368,6 +379,9 @@ fn build_ui(app: &libadwaita::Application) {
     sbb_box.append(&sbb_lbl);
     select_by_btn.set_child(Some(&sbb_box));
     select_by_btn.set_has_frame(true);
+    let no_ref_filter_btn = gtk4::ToggleButton::new();
+    no_ref_filter_btn.set_label("No Ref");
+    no_ref_filter_btn.set_tooltip_text(Some("Show only groups without reference images"));
     let options_btn = gtk4::MenuButton::new();
     options_btn.set_label("Options");
     let clear_results_btn = btn_icon_text("Remove All", "edit-clear-symbolic");    clear_results_btn.set_tooltip_text(Some("Remove all results and clear the display"));
@@ -417,6 +431,7 @@ fn build_ui(app: &libadwaita::Application) {
     sel_group.append(&clear_sel_btn);
     sel_group.append(&invert_sel_btn);
     sel_group.append(&select_by_btn);
+    sel_group.append(&no_ref_filter_btn);
     let action_group = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
     action_group.append(&move_sel_btn);
     action_group.append(&trash_sel_btn);
@@ -441,9 +456,10 @@ fn build_ui(app: &libadwaita::Application) {
     for dir in &app_settings.directories {
         let is_ref = app_settings.ref_dirs.contains(dir);
         add_dir_row(dir, is_ref, &dirs, &ref_dirs, &dir_list,
-            &scan_btn, &results_data, &auto_save, &rotation_enabled, &threshold_val, &select_by_btn);
+            &scan_btn, &results_data, &auto_save, &rotation_enabled, &threshold_val, &select_by_btn, &no_ref_filter_btn);
     }
     select_by_btn.set_visible(ref_dirs.lock().unwrap().is_empty());
+    no_ref_filter_btn.set_visible(!ref_dirs.lock().unwrap().is_empty());
 
     // --- Select By popover ---
     let popover = gtk4::PopoverMenu::from_model(None::<&gtk4::gio::MenuModel>);
@@ -543,6 +559,7 @@ fn build_ui(app: &libadwaita::Application) {
         let rot_clone = rotation_enabled.clone();
         let thr_clone = threshold_val.clone();
         let sbb = select_by_btn.clone();
+        let nrfbb = no_ref_filter_btn.clone();
         add_btn.connect_clicked(move |_| {
             let dialog = gtk4::FileDialog::new();
             dialog.set_title("Select directory to add");
@@ -558,6 +575,7 @@ fn build_ui(app: &libadwaita::Application) {
             let dirs2 = dirs.clone();
             let refs2 = ref_dirs.clone();
             let select_by_btn = sbb.clone();
+            let no_ref_filter_btn = nrfbb.clone();
             dialog.select_folder(
                 Some(&win),
                 None::<&gtk4::gio::Cancellable>,
@@ -571,7 +589,7 @@ fn build_ui(app: &libadwaita::Application) {
                         None => return,
                     };
                     add_dir_row(&path, false, &dirs, &ref_dirs, &dir_list,
-                        &scan_btn, &rdata2, &as2, &rot2, &thr2, &select_by_btn);
+                        &scan_btn, &rdata2, &as2, &rot2, &thr2, &select_by_btn, &no_ref_filter_btn);
                     save_settings(&as2, &rot2, &thr2, &*dirs2.lock().unwrap(), &*refs2.lock().unwrap());
                     status_label.set_text("");
                 },
@@ -774,6 +792,15 @@ fn build_ui(app: &libadwaita::Application) {
         move_sel_btn.set_sensitive(n > 0);
         trash_sel_btn.set_sensitive(n > 0);
         stats_label.set_text(&format!("Selected: {}", n));
+    }));
+
+    no_ref_filter_btn.connect_toggled(clone!(#[strong] results_data, move |btn| {
+        let active = btn.is_active();
+        let data = results_data.lock().unwrap();
+        for gd in data.iter() {
+            let has_ref = gd.files.iter().any(|f| f.reference);
+            gd.expander.set_visible(!active || !has_ref);
+        }
     }));
 
     trash_sel_btn.connect_clicked(clone!(#[strong] selection, #[strong] status_label, 
@@ -1198,6 +1225,7 @@ fn build_ui(app: &libadwaita::Application) {
         let move_btn_to_clear = move_sel_btn.clone();
         let trash_btn_to_clear = trash_sel_btn.clone();
         let select_by_to_clear = select_by_btn.clone();
+        let nrf_to_clear = no_ref_filter_btn.clone();
 
         clear_results_btn.connect_clicked(clone!(#[strong] window, move |_| {
             let dialog = libadwaita::AlertDialog::builder()
@@ -1224,6 +1252,7 @@ fn build_ui(app: &libadwaita::Application) {
             let move_btn = move_btn_to_clear.clone();
             let trash_btn = trash_btn_to_clear.clone();
             let select_by = select_by_to_clear.clone();
+            let nrf = nrf_to_clear.clone();
             dialog.connect_response(None, move |_, response| {
                 if response != "clear" { return; }
 
@@ -1244,6 +1273,8 @@ fn build_ui(app: &libadwaita::Application) {
                 no_results_label.set_visible(false);
                 toolbar.set_reveal_child(false);
                 scan_btn.set_sensitive(false);
+                nrf.set_active(false);
+                nrf.set_visible(false);
                 move_btn.set_sensitive(false);
                 trash_btn.set_sensitive(false);
                 select_by.set_visible(true);
@@ -1495,11 +1526,13 @@ struct PreviewFileWidgets {
 
 fn set_ref_styling(fd: &mut FileData, is_ref: bool) {
     fd.reference = is_ref;
-    fd.ref_badge.set_visible(is_ref);
+    fd.ref_badge.set_label(if is_ref { "REF" } else { "" });
     if is_ref {
+        fd.ref_badge.set_css_classes(&["status-pill-ref"]);
         fd.row.set_css_classes(&["ref-row"]);
         fd.name_label.set_css_classes(&["ref-path"]);
     } else {
+        fd.ref_badge.set_css_classes(&[]);
         fd.row.set_css_classes(&[]);
         fd.name_label.set_css_classes(&[]);
     }
@@ -1536,11 +1569,20 @@ fn do_select_all(
     stats_label: &gtk4::Label,
 ) {
     let data = results_data.lock().unwrap();
-    let to_select: Vec<String> = data.iter()
-        .flat_map(|gd| gd.files.iter())
-        .filter(|fd| !is_ref_path(&fd.path, ref_dirs))
-        .map(|fd| fd.path.clone())
-        .collect();
+    let mut to_select: Vec<String> = Vec::new();
+    let mut skipped = 0usize;
+    for gd in data.iter() {
+        let has_ref = gd.files.iter().any(|f| is_ref_path(&f.path, ref_dirs));
+        if !has_ref {
+            skipped += 1;
+            continue;
+        }
+        for fd in gd.files.iter() {
+            if !is_ref_path(&fd.path, ref_dirs) {
+                to_select.push(fd.path.clone());
+            }
+        }
+    }
     let n = to_select.len();
 
     {
@@ -1552,6 +1594,10 @@ fn do_select_all(
     }
 
     for gd in data.iter() {
+        let has_ref = gd.files.iter().any(|f| is_ref_path(&f.path, ref_dirs));
+        if !has_ref {
+            continue;
+        }
         for fd in gd.files.iter() {
             if !is_ref_path(&fd.path, ref_dirs) && !fd.check.is_active() {
                 fd.check.set_active(true);
@@ -1563,7 +1609,11 @@ fn do_select_all(
 
     move_sel_btn.set_sensitive(n > 0);
     trash_sel_btn.set_sensitive(n > 0);
-    stats_label.set_text(&format!("Selected: {}", n));
+    if skipped > 0 {
+        stats_label.set_text(&format!("Selected: {} ({} groups skipped — no reference images)", n, skipped));
+    } else {
+        stats_label.set_text(&format!("Selected: {}", n));
+    }
 }
 
 fn read_exif_string_tag(tiff: &[u8], ifd_off: usize, tag: u16, little_endian: bool) -> Option<String> {
@@ -1763,14 +1813,15 @@ fn build_results(results_box: &gtk4::Box,
         };
         let expander = gtk4::Expander::new(Some(&group_label));
         expander.set_expanded(true);
-        let files_box = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
-        files_box.set_margin_start(20);
-        let col_header = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+        let files_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+        files_box.set_margin_start(24);
+        let col_header = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
         col_header.set_css_classes(&["col-header-row"]);
         col_header.set_margin_bottom(2);
         col_header.set_margin_top(2);
-        let ch_check = gtk4::Label::new(None);
-        ch_check.set_width_chars(2);
+        let ch_check = gtk4::CheckButton::new();
+        ch_check.set_sensitive(false);
+        ch_check.set_can_target(false);
         let ch_name = gtk4::Label::new(Some("Path"));
         ch_name.set_css_classes(&["column-header"]);
         ch_name.set_hexpand(true);
@@ -1799,7 +1850,7 @@ fn build_results(results_box: &gtk4::Box,
         ch_actions.set_halign(gtk4::Align::End);
         ch_actions.set_margin_start(4);
         // Right-side header columns in a fixed box so separators always align
-        let ch_right = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        let ch_right = gtk4::Box::new(gtk4::Orientation::Horizontal, 2);
         ch_right.set_halign(gtk4::Align::End);
         ch_right.append(&mk_col_sep());
         ch_right.append(&ch_date);
@@ -1809,6 +1860,9 @@ fn build_results(results_box: &gtk4::Box,
         ch_right.append(&ch_size);
         ch_right.append(&mk_col_sep());
         ch_right.append(&ch_actions);
+        let ch_ref_spacer = gtk4::Label::new(None);
+        ch_ref_spacer.set_width_chars(5);
+        col_header.append(&ch_ref_spacer);
         col_header.append(&ch_check);
         col_header.append(&ch_name);
         col_header.append(&ch_right);
@@ -1826,7 +1880,7 @@ fn build_results(results_box: &gtk4::Box,
             let res_str = image::image_dimensions(std::path::Path::new(&path_str))
                 .ok().map(|(w, h)| format!("{}x{}", w, h)).unwrap_or_default();
             let date_str = read_exif_date(&path_str).unwrap_or_default();
-            let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+            let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
             row.set_css_classes(&["result-row"]);
             row.set_margin_top(2);
             row.set_margin_bottom(2);
@@ -1910,18 +1964,20 @@ fn build_results(results_box: &gtk4::Box,
                 name_label.set_css_classes(&["ref-path"]);
             }
 
-            let ref_badge = gtk4::Label::new(Some("REF"));
-            ref_badge.set_css_classes(&["status-pill-ref"]);
-            ref_badge.set_visible(is_ref);
+            let ref_badge = gtk4::Label::new(Some(if is_ref { "REF" } else { "" }));
+            ref_badge.set_width_chars(5);
+            if is_ref {
+                ref_badge.set_css_classes(&["status-pill-ref"]);
+            }
 
             let mk_row_sep = || {
                 let s = gtk4::Separator::new(gtk4::Orientation::Vertical);
-                s.set_margin_top(4);
-                s.set_margin_bottom(4);
+                s.set_margin_top(2);
+                s.set_margin_bottom(2);
                 s
             };
             // Right-side data columns mirror the header box exactly
-            let row_right = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+            let row_right = gtk4::Box::new(gtk4::Orientation::Horizontal, 2);
             row_right.set_halign(gtk4::Align::End);
             let actions_cell = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
             actions_cell.set_size_request(170, -1);
@@ -1939,12 +1995,12 @@ fn build_results(results_box: &gtk4::Box,
             row_right.append(&size_label);
             row_right.append(&mk_row_sep());
             row_right.append(&actions_cell);
+            row.append(&ref_badge);
             row.append(&check);
             row.append(&name_label);
-            row.append(&ref_badge);
+            row.append(&row_right);
             row.append(&deleted_label);
             row.append(&moved_label);
-            row.append(&row_right);
 
             let gesture = gtk4::GestureClick::new();
             gesture.set_button(1);
@@ -2510,6 +2566,53 @@ fn show_group_preview(
         Some(monitors.clone())
     ));
 
+    // Extract reference image values for date/size comparison
+    let ref_values: Option<(Option<String>, u64, Option<(u32, u32)>)> = entries.iter()
+        .find(|(_, is_ref)| *is_ref)
+        .map(|(ref_path, _)| {
+            let date = read_exif_date(ref_path);
+            let size = std::fs::metadata(ref_path).ok().map(|m| m.len()).unwrap_or(0);
+            let res = image::image_dimensions(std::path::Path::new(ref_path)).ok();
+            (date, size, res)
+        });
+
+    // Check if all entries share the same date, time, resolution, and size
+    let (all_same_meta, same_date, same_size, same_res): (bool, bool, bool, bool) = {
+        let dates: Vec<Option<String>> = entries.iter()
+            .map(|(p, _)| read_exif_date(p))
+            .collect();
+        let sizes: Vec<u64> = entries.iter()
+            .filter_map(|(p, _)| std::fs::metadata(p).ok().map(|m| m.len()))
+            .collect();
+        let resolutions: Vec<Option<(u32, u32)>> = entries.iter()
+            .map(|(p, _)| image::image_dimensions(std::path::Path::new(p)).ok())
+            .collect();
+        let same_date = !dates.is_empty() && dates[0].is_some() && dates.iter().all(|d| *d == dates[0]);
+        let same_size = sizes.len() > 1 && sizes.iter().all(|s| *s == sizes[0]);
+        let same_res = !resolutions.is_empty() && resolutions[0].is_some() && resolutions.iter().all(|r| *r == resolutions[0]);
+        let all = same_date && same_size && same_res;
+        (all, same_date, same_size, same_res)
+    };
+
+    if !all_same_meta {
+        let mut diff_fields: Vec<&str> = Vec::new();
+        if !same_date { diff_fields.push("Date"); }
+        if !same_size { diff_fields.push("Size"); }
+        if !same_res { diff_fields.push("Resolution"); }
+        let warn_text = format!("⚠ Different metadata: {}", diff_fields.join(", "));
+        let warn = gtk4::Label::new(Some(&warn_text));
+        warn.set_css_classes(&["error"]);
+        warn.set_halign(gtk4::Align::Center);
+        warn.set_margin_bottom(4);
+        main_box.append(&warn);
+    } else {
+        let ok = gtk4::Label::new(Some("Same Date, Time, Resolution And Size"));
+        ok.set_css_classes(&["success"]);
+        ok.set_halign(gtk4::Align::Center);
+        ok.set_margin_bottom(4);
+        main_box.append(&ok);
+    }
+
     for (entry_idx, (path, is_ref)) in entries.iter().enumerate() {
         let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
         row.set_css_classes(&["card"]);
@@ -2579,8 +2682,8 @@ fn show_group_preview(
 
         if *is_ref {
             pic_frame.set_css_classes(&["ref-image"]);
-            let ref_label = gtk4::Label::new(Some("Reference"));
-            ref_label.set_css_classes(&["ref-path"]);
+            let ref_label = gtk4::Label::new(Some("Reference Image"));
+            ref_label.set_css_classes(&["ref-label-green"]);
             ref_label.set_halign(gtk4::Align::Center);
             ref_label.set_margin_top(2);
             image_box.append(&ref_label);
@@ -2599,7 +2702,7 @@ fn show_group_preview(
         name_label.set_max_width_chars(40);
         name_label.set_halign(gtk4::Align::Start);
         if *is_ref {
-            name_label.set_css_classes(&["ref-path"]);
+            name_label.set_css_classes(&["ref-label-green"]);
         }
 
         let path_label = gtk4::Label::new(Some(path));
@@ -2619,7 +2722,7 @@ fn show_group_preview(
         meta_box.set_halign(gtk4::Align::Start);
         meta_box.set_margin_top(4);
 
-        let mk_row = |label: &str, value: &str| -> gtk4::Box {
+        let mk_row = |label: &str, value: &str, color: Option<&str>| -> gtk4::Box {
             let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
             let lbl = gtk4::Label::new(Some(label));
             lbl.set_css_classes(&["dim-label"]);
@@ -2627,21 +2730,47 @@ fn show_group_preview(
             lbl.set_xalign(1.0);
             let val = gtk4::Label::new(Some(value));
             val.set_halign(gtk4::Align::Start);
+            if let Some(cls) = color {
+                val.set_css_classes(&[cls]);
+            }
             row.append(&lbl);
             row.append(&val);
             row
         };
 
+        let mk_row_default = |label: &str, value: &str| -> gtk4::Box {
+            mk_row(label, value, None)
+        };
+
+        // Compare against reference image: green if match, red if mismatch
+        // Applies to all entries including the reference image (which matches itself).
+        let date_color = ref_values.as_ref().and_then(|(ref_date, _, _)| {
+            ref_date.as_ref().and_then(|rd| {
+                date_str.as_ref().map(|d| {
+                    if d == rd { "ref-label-green" } else { "error" }
+                })
+            })
+        });
+        let resolution_color = ref_values.as_ref().and_then(|(_, _, ref_res)| {
+            ref_res.map(|(rw, rh)| {
+                let (w, h) = image::image_dimensions(std::path::Path::new(path)).ok().unwrap_or((0, 0));
+                if w == rw && h == rh { "ref-label-green" } else { "error" }
+            })
+        });
+        let size_color = ref_values.as_ref().map(|(_, ref_size, _)| {
+            if size_val == *ref_size { "ref-label-green" } else { "error" }
+        });
+
         if let Some(ref d) = date_str {
-            meta_box.append(&mk_row("Date Taken", d));
+            meta_box.append(&mk_row("Date Taken", d, date_color));
         }
         if let Some(ref m) = model_str {
-            meta_box.append(&mk_row("Camera", m));
+            meta_box.append(&mk_row_default("Camera", m));
         }
         if !res_str.is_empty() {
-            meta_box.append(&mk_row("Resolution", &res_str));
+            meta_box.append(&mk_row("Resolution", &res_str, resolution_color));
         }
-        meta_box.append(&mk_row("Size", &size_str));
+        meta_box.append(&mk_row("Size", &size_str, size_color));
 
         info_box.append(&name_label);
         info_box.append(&path_label);
@@ -3462,11 +3591,16 @@ fn show_zoom_window(
 }
 
 fn show_about_window(parent: &gtk4::Window) {
+    let build_date = env!("COMPILED_DATE_TIME");
+    let comments = format!(
+        "Duplicate Image Finder — finds near-duplicate images using perceptual hashing\nBuild: {}",
+        build_date
+    );
     let about = libadwaita::AboutDialog::builder()
         .application_name("ImpHash")
         .application_icon("imphash")
         .version(APP_VERSION)
-        .comments("Duplicate Image Finder - finds near-duplicate images using perceptual hashing")
+        .comments(comments)
         .developer_name("antoxa78")
         .license_type(gtk4::License::MitX11)
         .website("https://github.com/antoxa78/ImpHash")
