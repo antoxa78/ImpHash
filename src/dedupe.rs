@@ -44,7 +44,6 @@ pub fn find_duplicates(
 ) -> Result<Vec<DuplicateGroup>> {
     let total = paths.len();
     let counter = AtomicUsize::new(0);
-    let last_pct = AtomicUsize::new(0);
     let failed = AtomicUsize::new(0);
 
     let entries: Vec<ImageEntry> = paths.par_iter().filter_map(|path| {
@@ -136,15 +135,10 @@ pub fn find_duplicates(
         };
 
         let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
-        let pct = (done * 100) / total.max(1);
-        let prev = last_pct.load(Ordering::Relaxed);
-        if pct > prev || done == total {
-            last_pct.store(pct, Ordering::Relaxed);
-            let name = path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("");
-            progress(done, total, failed.load(Ordering::Relaxed), name);
-        }
+        let name = path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        progress(done, total, failed.load(Ordering::Relaxed), name);
 
         Some(ImageEntry {
             path: path.clone(),

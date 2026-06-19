@@ -27,6 +27,7 @@ struct ProgressState {
     failed:       AtomicUsize,
     is_hashing:   AtomicBool,
     dirty:        AtomicBool,
+    current_file: Mutex<Option<String>>,
 }
 
 impl ProgressState {
@@ -37,6 +38,7 @@ impl ProgressState {
             failed:       AtomicUsize::new(0),
             is_hashing:   AtomicBool::new(true),
             dirty:        AtomicBool::new(false),
+            current_file: Mutex::new(None),
         }
     }
 }
@@ -267,16 +269,18 @@ fn build_ui(app: &libadwaita::Application) {
          .moved label { color: @success_color; }\
          .moved button label { color: @window_fg_color; }\
          .moved .dim-label { color: alpha(@success_color, 0.6); }\
-         .group-frame { border: 1px solid @borders; border-radius: 8px; background: @card_bg_color; transition: all 150ms ease; }\
-         .group-frame:hover { border-color: alpha(@accent_color, 0.3); box-shadow: 0 1px 4px alpha(black, 0.08); }\
-         .result-row { padding: 5px 8px; padding-left: 9px; border-radius: 4px; transition: background 100ms ease; border-bottom: 1px solid alpha(@borders, 0.25); }\
-         .result-row:last-child { border-bottom: none; }\
+           .group-frame { border: 1px solid @borders; border-radius: 8px; background: @card_bg_color; transition: all 150ms ease; }\
+           .group-frame:hover { border-color: alpha(@accent_color, 0.3); box-shadow: 0 1px 4px alpha(black, 0.08); }\
+
+          .result-row { padding: 5px 8px; padding-left: 9px; border-radius: 4px; transition: background 100ms ease; }\
+
          .result-row:hover { background: alpha(@accent_color, 0.04); }\
          .result-row:selected { background: alpha(@accent_color, 0.1); }\
          .toolbar-box { background: @card_bg_color; border: 1px solid @borders; border-radius: 8px; padding: 6px 8px; }\
-         .progress trough { min-height: 8px; border-radius: 4px; }\
-         .progress progress { border-radius: 4px; }\
-         .group-header-btn { margin: 0 2px; }\
+
+          .group-header-btn { margin: 0 2px; }\
+          .group-toggle { min-width: 20px; min-height: 20px; padding: 0; margin: 0 2px; }\
+
          .group-header { background: alpha(@accent_color, 0.04); border-bottom: 1px solid alpha(@accent_color, 0.15); padding: 6px 0; }\
           .column-header { font-weight: 600; color: @insensitive_fg_color; padding: 2px 6px; }\
          .col-header-row { background: alpha(@accent_color, 0.04); border-bottom: 2px solid alpha(@accent_color, 0.15); margin-bottom: 4px; padding: 4px 6px; padding-left: 9px; border-radius: 4px 4px 0 0; }\
@@ -340,15 +344,11 @@ fn build_ui(app: &libadwaita::Application) {
     pause_btn.set_tooltip_text(Some("Pause or resume the current scan"));
 
     let progress_bar = gtk4::ProgressBar::new();
-    progress_bar.set_css_classes(&["progress"]);
-    progress_bar.set_show_text(true);
-    progress_bar.set_height_request(32);
+    progress_bar.set_show_text(false);
+    progress_bar.set_height_request(8);
     progress_bar.set_hexpand(true);
-    progress_bar.set_valign(gtk4::Align::Center);
     let status_label = gtk4::Label::new(None);
     status_label.set_halign(gtk4::Align::Start);
-    status_label.set_valign(gtk4::Align::Start);
-    status_label.set_margin_start(12);
     status_label.set_wrap(true);
     status_label.set_hexpand(true);
     status_label.set_max_width_chars(80);
@@ -799,7 +799,11 @@ fn build_ui(app: &libadwaita::Application) {
         let data = results_data.lock().unwrap();
         for gd in data.iter() {
             let has_ref = gd.files.iter().any(|f| f.reference);
-            gd.expander.set_visible(!active || !has_ref);
+            let visible = !active || !has_ref;
+            gd.revealer.set_visible(visible);
+            if let Some(parent) = gd.revealer.parent() {
+                parent.set_visible(visible);
+            }
         }
     }));
 
@@ -1314,7 +1318,6 @@ fn build_ui(app: &libadwaita::Application) {
         pause_btn.set_sensitive(true);
         progress_bar.set_fraction(0.0);
         progress_bar.set_show_text(true);
-        progress_bar.set_text(Some("Starting..."));
         status_label.set_text("Scanning directories...");
         move_sel_btn.set_sensitive(false);
         trash_sel_btn.set_sensitive(false);
@@ -1372,7 +1375,6 @@ fn build_ui(app: &libadwaita::Application) {
                     ScanMsg::NoImages => {
                         timer_status.set_text("No images found");
                         timer_bar.set_fraction(1.0);
-                        timer_bar.set_text(Some("Complete - 100%"));
                         timer_cancel_btn.set_sensitive(false);
                         timer_pause_btn.set_sensitive(false);
                         timer_scan_btn.set_sensitive(true);
@@ -1391,7 +1393,6 @@ fn build_ui(app: &libadwaita::Application) {
                         timer_pause_btn.set_sensitive(false);
                         timer_scan_btn.set_sensitive(true);
                         timer_bar.set_fraction(1.0);
-                        timer_bar.set_text(Some("Complete - 100%"));
                         return glib::ControlFlow::Break;
                     }
                     ScanMsg::Error(e) => {
@@ -1414,10 +1415,19 @@ fn build_ui(app: &libadwaita::Application) {
             let (frac, msg) = if is_hashing {
                 let p = (done as f64 / total.max(1) as f64) * 0.85 + 0.05;
                 let percent = ((done as f64 / total.max(1) as f64) * 85.0 + 5.0) as i32;
+                let file = timer_progress.current_file.lock().unwrap().clone();
                 let m = if failed > 0 {
-                    format!("Hashing: {}/{} ({} failed) - {}%", done, total, failed, percent)
+                    if let Some(ref f) = file {
+                        format!("Hashing: {}/{} ({} failed) — {} — {}%", done, total, failed, f, percent)
+                    } else {
+                        format!("Hashing: {}/{} ({} failed) - {}%", done, total, failed, percent)
+                    }
                 } else {
-                    format!("Hashing: {}/{} - {}%", done, total, percent)
+                    if let Some(ref f) = file {
+                        format!("Hashing: {}/{} — {} — {}%", done, total, f, percent)
+                    } else {
+                        format!("Hashing: {}/{} - {}%", done, total, percent)
+                    }
                 };
                 (p, m)
             } else {
@@ -1431,7 +1441,6 @@ fn build_ui(app: &libadwaita::Application) {
                 (p, m)
             };
             timer_bar.set_fraction(frac as f64);
-            timer_bar.set_text(Some(&msg));
             timer_status.set_text(&msg);
             glib::ControlFlow::Continue
         });
@@ -1470,6 +1479,9 @@ fn build_ui(app: &libadwaita::Application) {
                         std::thread::sleep(std::time::Duration::from_millis(100));
                     }
                     let is_hash = !cur_file.is_empty();
+                    if is_hash {
+                        *progress.current_file.lock().unwrap() = Some(cur_file.to_string());
+                    }
                     progress.done.store(done, Ordering::Relaxed);
                     progress.total.store(total, Ordering::Relaxed);
                     progress.failed.store(failed, Ordering::Relaxed);
@@ -1506,7 +1518,8 @@ struct FileData {
 }
 
 struct GroupData {
-    expander: gtk4::Expander,
+    toggle_btn: gtk4::ToggleButton,
+    revealer: gtk4::Revealer,
     files: Vec<FileData>,
 }
 
@@ -1603,7 +1616,8 @@ fn do_select_all(
                 fd.check.set_active(true);
             }
         }
-        gd.expander.set_expanded(true);
+        gd.toggle_btn.set_active(true);
+        gd.revealer.set_reveal_child(true);
     }
     drop(data);
 
@@ -1811,10 +1825,17 @@ fn build_results(results_box: &gtk4::Box,
         } else {
             format!("Group #{} ({} files)", gi + 1, group.files.len())
         };
-        let expander = gtk4::Expander::new(Some(&group_label));
-        expander.set_expanded(true);
+        let toggle_btn = gtk4::ToggleButton::new();
+        toggle_btn.set_active(true);
+        toggle_btn.add_css_class("flat");
+        toggle_btn.set_css_classes(&["group-toggle"]);
+        toggle_btn.set_valign(gtk4::Align::Center);
+        let toggle_arrow = gtk4::Label::new(Some("▼"));
+        toggle_btn.set_child(Some(&toggle_arrow));
+        let group_label_w = gtk4::Label::new(Some(&group_label));
+        group_label_w.set_xalign(0.0);
+        group_label_w.set_hexpand(true);
         let files_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
-        files_box.set_margin_start(24);
         let col_header = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
         col_header.set_css_classes(&["col-header-row"]);
         col_header.set_margin_bottom(2);
@@ -2184,17 +2205,30 @@ fn build_results(results_box: &gtk4::Box,
                 show_group_preview(&entries, &rd, &pw_for_view, group_num);
             });
         }
+        let revealer = gtk4::Revealer::new();
+        revealer.set_reveal_child(true);
+        revealer.set_child(Some(&files_box));
+        let r = revealer.clone();
+        let arrow = toggle_arrow.clone();
+        toggle_btn.connect_toggled(move |btn| {
+            let expanded = btn.is_active();
+            r.set_reveal_child(expanded);
+            arrow.set_text(if expanded { "\u{25BC}" } else { "\u{25B6}" });
+        });
         let group_header = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
         group_header.set_css_classes(&["group-header"]);
+        group_header.append(&toggle_btn);
+        group_header.append(&group_label_w);
         group_header.append(&group_view_btn);
-        files_box.prepend(&group_header);
-        expander.set_child(Some(&files_box));
+        let outer_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        outer_box.append(&group_header);
+        outer_box.append(&revealer);
         let frame = gtk4::Frame::new(None);
         frame.set_css_classes(&["group-frame"]);
-        frame.set_child(Some(&expander));
+        frame.set_child(Some(&outer_box));
         frame.set_margin_bottom(6);
         results_box.append(&frame);
-        new_data.push(GroupData { expander, files: file_datas });
+        new_data.push(GroupData { toggle_btn, revealer, files: file_datas });
     }
 
     *results_data.lock().unwrap() = new_data;
