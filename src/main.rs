@@ -1528,7 +1528,6 @@ struct GroupData {
     files: Vec<FileData>,
 }
 
-#[allow(dead_code)]
 struct PreviewFileWidgets {
     picture: gtk4::Picture,
     status_overlay_box: gtk4::Box,
@@ -1540,6 +1539,7 @@ struct PreviewFileWidgets {
     move_btn: gtk4::Button,
     restore_btn: gtk4::Button,
     restore_move_btn: gtk4::Button,
+    zoom_btn: gtk4::Button,
 }
 
 fn set_ref_styling(fd: &mut FileData, is_ref: bool) {
@@ -2925,6 +2925,7 @@ fn show_group_preview(
         let overlay_lbl_restore = status_overlay_label.clone();
         let trash_btn_restore = trash_btn.clone();
         let restore_btn_ref = restore_btn.clone();
+        let zoom_btn_restore = zoom_btn.clone();
         let moved_to_lbl_restore = moved_to_label.clone();
         let shared_deleted_restore = shared_deleted.clone();
         restore_btn.connect_clicked(move |_| {
@@ -2959,6 +2960,7 @@ fn show_group_preview(
                     overlay_restore.set_visible(false);
                     restore_btn_ref.set_visible(false);
                     trash_btn_restore.set_visible(true);
+                    zoom_btn_restore.set_sensitive(true);
                     // Update main window
                     if let Some(w) = mw_restore.get(&rp) {
                         w.deleted_label.set_visible(false);
@@ -3050,6 +3052,7 @@ fn show_group_preview(
             let ot_restore_btn = restore_btn.clone();
             let ot_zoom_btn = zoom_btn.clone();
             let ot_mw = main_widgets.clone();
+            let ot_pw = preview_widgets.clone();
             zoom_btn.connect_clicked(move |btn| {
                 if let Some(root) = btn.root() {
                     if let Some(parent_win) = root.downcast_ref::<gtk4::Window>() {
@@ -3076,25 +3079,48 @@ fn show_group_preview(
                             .filter(|p| is_available(p))
                             .count();
                         let new_idx = new_idx.min(filtered.len() - 1);
-                        let ot_pic2 = ot_picture.clone();
-                        let ot_ov2 = ot_overlay.clone();
-                        let ot_ic2 = ot_icon.clone();
-                        let ot_lb2 = ot_lbl.clone();
-                        let ot_tb2 = ot_trash_btn.clone();
-                        let ot_rb2 = ot_restore_btn.clone();
-                        let ot_zb2 = ot_zoom_btn.clone();
+                        let ot_pw2 = ot_pw.clone();
+                        let ot_pic_fb = ot_picture.clone();
+                        let ot_ov_fb = ot_overlay.clone();
+                        let ot_ic_fb = ot_icon.clone();
+                        let ot_lb_fb = ot_lbl.clone();
+                        let ot_tb_fb = ot_trash_btn.clone();
+                        let ot_rb_fb = ot_restore_btn.clone();
+                        let ot_zb_fb = ot_zoom_btn.clone();
                         let ot_mw2 = ot_mw.clone();
                         show_zoom_window(parent_win, &std::rc::Rc::new(filtered), new_idx,
                             shared_deleted_for_zoom.clone(),
                             move |trashed_path| {
-                                // Sync group-preview overlay for this entry
-                                ot_pic2.set_visible(false);
-                                ot_ic2.set_icon_name(Some("user-trash-symbolic"));
-                                ot_lb2.set_text("Moved to trash");
-                                ot_ov2.set_visible(true);
-                                ot_tb2.set_visible(false);
-                                ot_rb2.set_visible(true);
-                                ot_zb2.set_sensitive(false);
+                                // Sync group-preview overlay for the trashed entry
+                                let pw_map = ot_pw2.lock().unwrap();
+                                let tp = trashed_path.clone();
+                                let (pic, ic, lb, ov, tb, rb, zb) =
+                                    if let Some(pw) = pw_map.get(&tp) {
+                                        (pw.picture.clone(),
+                                         pw.status_icon.clone(),
+                                         pw.status_overlay_label.clone(),
+                                         pw.status_overlay_box.clone(),
+                                         pw.trash_btn.clone(),
+                                         pw.restore_btn.clone(),
+                                         pw.zoom_btn.clone())
+                                    } else {
+                                        // Fallback: update the entry that opened zoom
+                                        (ot_pic_fb.clone(),
+                                         ot_ic_fb.clone(),
+                                         ot_lb_fb.clone(),
+                                         ot_ov_fb.clone(),
+                                         ot_tb_fb.clone(),
+                                         ot_rb_fb.clone(),
+                                         ot_zb_fb.clone())
+                                    };
+                                drop(pw_map);
+                                pic.set_visible(false);
+                                ic.set_icon_name(Some("user-trash-symbolic"));
+                                lb.set_text("Moved to trash");
+                                ov.set_visible(true);
+                                tb.set_visible(false);
+                                rb.set_visible(true);
+                                zb.set_sensitive(false);
                                 // Sync main-window FileData
                                 if let Some(w) = ot_mw2.get(&trashed_path) {
                                     w.deleted_label.set_visible(true);
@@ -3136,6 +3162,7 @@ fn show_group_preview(
             move_btn: move_btn.clone(),
             restore_btn: restore_btn.clone(),
             restore_move_btn: restore_move_btn.clone(),
+            zoom_btn: zoom_btn.clone(),
         });
 
         // Sync preview state with main window for already-trashed/moved/missing files
