@@ -255,8 +255,7 @@ fn build_ui(app: &libadwaita::Application) {
 
     let provider = gtk4::CssProvider::new();
     provider.load_from_string(
-         ".ref-row { background: alpha(@accent_color, 0.08); border-left: 3px solid @accent_color; padding-left: 3px; }\
-          .ref-image { border: 3px solid @success_color; border-radius: 6px; }\
+          ".ref-image { border: 3px solid @success_color; border-radius: 6px; }\
           .ref-label-green { color: @success_color; font-weight: 600; }\
           .ref-path { color: @accent_color; font-weight: 600; }\
          .dir-list { border: 1px solid @borders; border-radius: 6px; background: @card_bg_color; }\
@@ -272,20 +271,23 @@ fn build_ui(app: &libadwaita::Application) {
            .group-frame { border: 1px solid @borders; border-radius: 8px; background: @card_bg_color; transition: all 150ms ease; }\
            .group-frame:hover { border-color: alpha(@accent_color, 0.3); box-shadow: 0 1px 4px alpha(black, 0.08); }\
 
-          .result-row { padding: 5px 8px; padding-left: 9px; border-radius: 4px; transition: background 100ms ease; }\
+          .result-row { padding: 5px 8px; padding-left: 9px; border-radius: 4px; border-left: 3px solid transparent; transition: background 100ms ease; }\
+          .result-row:hover { background: alpha(@accent_color, 0.04); }\
+          .result-row:selected { background: alpha(@accent_color, 0.1); }\
+          .ref-row { background: alpha(@accent_color, 0.08); border-left: 3px solid @accent_color; }\
 
-         .result-row:hover { background: alpha(@accent_color, 0.04); }\
-         .result-row:selected { background: alpha(@accent_color, 0.1); }\
          .toolbar-box { background: @card_bg_color; border: 1px solid @borders; border-radius: 8px; padding: 6px 8px; }\
 
           .group-header-btn { margin: 0 2px; }\
           .group-toggle { min-width: 20px; min-height: 20px; padding: 0; margin: 0 2px; }\
 
          .group-header { background: alpha(@accent_color, 0.04); border-bottom: 1px solid alpha(@accent_color, 0.15); padding: 6px 0; }\
-          .column-header { font-weight: 600; color: @insensitive_fg_color; padding: 2px 6px; }\
-         .col-header-row { background: alpha(@accent_color, 0.04); border-bottom: 2px solid alpha(@accent_color, 0.15); margin-bottom: 4px; padding: 4px 6px; padding-left: 9px; border-radius: 4px 4px 0 0; }\
+           .column-header { font-weight: 600; color: @insensitive_fg_color; padding: 2px 6px; }\
+          .dim-label { padding: 2px 6px; }\
+          .col-header-row { background: alpha(@accent_color, 0.04); border-bottom: 2px solid alpha(@accent_color, 0.15); margin-bottom: 4px; padding: 4px 8px; padding-left: 9px; border-radius: 4px 4px 0 0; }\
          .status-pill { background: alpha(@accent_color, 0.08); border-radius: 12px; padding: 2px 10px; font-weight: 600; }\
-         .status-pill-ref { background: alpha(@success_color, 0.12); color: @success_color; border-radius: 10px; padding: 2px 8px; font-weight: 600; font-size: 0.8em; }\
+           .status-pill-ref { background: alpha(@success_color, 0.12); color: @success_color; border-radius: 10px; padding: 2px 8px; font-weight: 600; font-size: 0.8em; }\
+          .status-pill-hidden { padding: 2px 8px; font-size: 0.8em; }\
          .status-pill-rot { background: alpha(@warning_color, 0.15); color: @warning_color; border-radius: 12px; padding: 2px 10px; font-weight: 600; font-size: 0.85em; }\
          viewport, scrolledwindow, list, box { border: none; background: transparent; }\
          .card { background: @card_bg_color; border: 1px solid @borders; border-radius: 8px; padding: 8px; transition: all 150ms ease; }\
@@ -1542,11 +1544,11 @@ fn set_ref_styling(fd: &mut FileData, is_ref: bool) {
     fd.ref_badge.set_label(if is_ref { "REF" } else { "" });
     if is_ref {
         fd.ref_badge.set_css_classes(&["status-pill-ref"]);
-        fd.row.set_css_classes(&["ref-row"]);
+        fd.row.set_css_classes(&["result-row", "ref-row"]);
         fd.name_label.set_css_classes(&["ref-path"]);
     } else {
-        fd.ref_badge.set_css_classes(&[]);
-        fd.row.set_css_classes(&[]);
+        fd.ref_badge.set_css_classes(&["status-pill-hidden"]);
+        fd.row.set_css_classes(&["result-row"]);
         fd.name_label.set_css_classes(&[]);
     }
 }
@@ -1882,9 +1884,10 @@ fn build_results(results_box: &gtk4::Box,
         ch_right.append(&mk_col_sep());
         ch_right.append(&ch_actions);
         let ch_ref_spacer = gtk4::Label::new(None);
-        ch_ref_spacer.set_width_chars(5);
-        col_header.append(&ch_ref_spacer);
+        ch_ref_spacer.set_size_request(52, -1);
+        ch_ref_spacer.set_css_classes(&["status-pill-hidden"]);
         col_header.append(&ch_check);
+        col_header.append(&ch_ref_spacer);
         col_header.append(&ch_name);
         col_header.append(&ch_right);
         files_box.append(&col_header);
@@ -1981,14 +1984,17 @@ fn build_results(results_box: &gtk4::Box,
                 }
             });
             if is_ref {
-                row.set_css_classes(&["ref-row"]);
+                row.set_css_classes(&["result-row", "ref-row"]);
                 name_label.set_css_classes(&["ref-path"]);
             }
 
             let ref_badge = gtk4::Label::new(Some(if is_ref { "REF" } else { "" }));
-            ref_badge.set_width_chars(5);
+            ref_badge.set_size_request(52, -1);
+            ref_badge.set_halign(gtk4::Align::Center);
             if is_ref {
                 ref_badge.set_css_classes(&["status-pill-ref"]);
+            } else {
+                ref_badge.set_css_classes(&["status-pill-hidden"]);
             }
 
             let mk_row_sep = || {
@@ -2016,8 +2022,8 @@ fn build_results(results_box: &gtk4::Box,
             row_right.append(&size_label);
             row_right.append(&mk_row_sep());
             row_right.append(&actions_cell);
-            row.append(&ref_badge);
             row.append(&check);
+            row.append(&ref_badge);
             row.append(&name_label);
             row.append(&row_right);
             row.append(&deleted_label);
@@ -2162,7 +2168,7 @@ fn build_results(results_box: &gtk4::Box,
                 move_btn.set_visible(false);
                 check.set_sensitive(false);
                 if is_ref {
-                    row.set_css_classes(&["deleted", "ref-row"]);
+                    row.set_css_classes(&["result-row", "deleted", "ref-row"]);
                 } else {
                     row.set_css_classes(&["deleted"]);
                 }
