@@ -1839,15 +1839,11 @@ fn build_results(results_box: &gtk4::Box,
         toggle_btn.set_child(Some(&toggle_arrow));
         let group_label_w = gtk4::Label::new(Some(&group_label));
         group_label_w.set_xalign(0.0);
-        group_label_w.set_hexpand(true);
         let files_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
         let col_header = gtk4::Box::new(gtk4::Orientation::Horizontal, 4);
         col_header.set_css_classes(&["col-header-row"]);
         col_header.set_margin_bottom(2);
         col_header.set_margin_top(2);
-        let ch_check = gtk4::CheckButton::new();
-        ch_check.set_sensitive(false);
-        ch_check.set_can_target(false);
         let ch_name = gtk4::Label::new(Some("Path"));
         ch_name.set_css_classes(&["column-header"]);
         ch_name.set_hexpand(true);
@@ -1886,11 +1882,6 @@ fn build_results(results_box: &gtk4::Box,
         ch_right.append(&ch_size);
         ch_right.append(&mk_col_sep());
         ch_right.append(&ch_actions);
-        let ch_ref_spacer = gtk4::Label::new(None);
-        ch_ref_spacer.set_size_request(52, -1);
-        ch_ref_spacer.set_css_classes(&["status-pill-hidden"]);
-        col_header.append(&ch_check);
-        col_header.append(&ch_ref_spacer);
         col_header.append(&ch_name);
         col_header.append(&ch_right);
         files_box.append(&col_header);
@@ -2229,6 +2220,9 @@ fn build_results(results_box: &gtk4::Box,
         group_header.append(&toggle_btn);
         group_header.append(&group_label_w);
         group_header.append(&group_view_btn);
+        let header_spacer = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        header_spacer.set_hexpand(true);
+        group_header.append(&header_spacer);
         let outer_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         outer_box.append(&group_header);
         outer_box.append(&revealer);
