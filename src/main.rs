@@ -805,6 +805,9 @@ fn build_ui(app: &libadwaita::Application) {
             gd.revealer.set_visible(visible);
             if let Some(parent) = gd.revealer.parent() {
                 parent.set_visible(visible);
+                if let Some(grandparent) = parent.parent() {
+                    grandparent.set_visible(visible);
+                }
             }
         }
     }));
