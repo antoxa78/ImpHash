@@ -2,9 +2,12 @@ use anyhow::{bail, Result};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// Maximum time to wait for a single image decode.  Very large or malformed
+/// images can hang the decoder; this prevents the scan from hanging forever.
+const IMAGE_DECODE_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn open_image_timeout(path: &Path, cancel: &AtomicBool) -> Result<image::DynamicImage> {
     let path_buf = path.to_owned();
@@ -13,13 +16,22 @@ fn open_image_timeout(path: &Path, cancel: &AtomicBool) -> Result<image::Dynamic
     std::thread::spawn(move || {
         let _ = tx.send(crate::formats::open_image(&path_buf));
     });
+    let deadline = Instant::now().checked_add(IMAGE_DECODE_TIMEOUT)
+        .expect("decode deadline overflow");
     loop {
         if cancel.load(Ordering::Relaxed) {
             bail!("Cancelled by user");
         }
-        match rx.recv_timeout(POLL_INTERVAL) {
+        let now = Instant::now();
+        let timeout = deadline.saturating_duration_since(now).min(POLL_INTERVAL);
+        match rx.recv_timeout(timeout) {
             Ok(result) => return Ok(result?),
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if Instant::now() >= deadline {
+                    bail!("Timed out decoding {:?} after {:?}", path_for_err, IMAGE_DECODE_TIMEOUT);
+                }
+                continue;
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 bail!("Decoder thread panicked for {:?}", path_for_err)
             }

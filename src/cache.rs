@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
+use crate::MutexExt;
+
 #[derive(Serialize, Deserialize, Clone)]
 struct CacheEntry {
     mtime: u64,
@@ -19,6 +21,9 @@ struct CacheEntry {
 pub struct HashCache {
     inner: Mutex<HashMap<String, CacheEntry>>,
     path: PathBuf,
+    /// Serialises file write operations (save/clear) so they cannot interleave
+    /// or corrupt the on-disk cache file when multiple threads touch it.
+    save_lock: Mutex<()>,
 }
 
 impl HashCache {
@@ -37,11 +42,12 @@ impl HashCache {
         Ok(HashCache {
             inner: Mutex::new(data),
             path,
+            save_lock: Mutex::new(()),
         })
     }
 
     pub fn lookup(&self, path: &Path, mtime: u64, size: u64) -> Option<u64> {
-        let map = self.inner.lock().unwrap();
+        let map = self.inner.lock_unpoisoned();
         let key = path_key(path);
         map.get(&key).and_then(|entry| {
             if entry.mtime == mtime && entry.size == size {
@@ -53,7 +59,7 @@ impl HashCache {
     }
 
     pub fn insert(&self, path: &Path, mtime: u64, size: u64, hash: u64) {
-        let mut map = self.inner.lock().unwrap();
+        let mut map = self.inner.lock_unpoisoned();
         let entry = map.entry(path_key(path)).or_insert(CacheEntry {
             mtime: 0,
             size: 0,
@@ -69,7 +75,7 @@ impl HashCache {
     #[cfg(feature = "pdq")]
     #[allow(dead_code)]
     pub fn lookup_pdq(&self, path: &Path, mtime: u64, size: u64) -> Option<String> {
-        let map = self.inner.lock().unwrap();
+        let map = self.inner.lock_unpoisoned();
         let key = path_key(path);
         map.get(&key).and_then(|entry| {
             if entry.mtime == mtime && entry.size == size {
@@ -83,7 +89,7 @@ impl HashCache {
     #[cfg(feature = "pdq")]
     #[allow(dead_code)]
     pub fn insert_pdq(&self, path: &Path, mtime: u64, size: u64, hash: u64, pdq_hex: &str) {
-        let mut map = self.inner.lock().unwrap();
+        let mut map = self.inner.lock_unpoisoned();
         let entry = map.entry(path_key(path)).or_insert(CacheEntry {
             mtime: 0,
             size: 0,
@@ -98,7 +104,7 @@ impl HashCache {
     }
 
     pub fn lookup_rot(&self, path: &Path, mtime: u64, size: u64) -> Option<[u64; 4]> {
-        let map = self.inner.lock().unwrap();
+        let map = self.inner.lock_unpoisoned();
         let key = path_key(path);
         map.get(&key).and_then(|entry| {
             if entry.mtime == mtime && entry.size == size {
@@ -110,7 +116,7 @@ impl HashCache {
     }
 
     pub fn insert_rot(&self, path: &Path, mtime: u64, size: u64, hashes: [u64; 4]) {
-        let mut map = self.inner.lock().unwrap();
+        let mut map = self.inner.lock_unpoisoned();
         let key = path_key(path);
         let entry = map.entry(key).or_insert(CacheEntry {
             mtime: 0,
@@ -125,14 +131,18 @@ impl HashCache {
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
-        let map = self.inner.lock().unwrap();
+        // Serialize with clear() and other save() calls so the on-disk file is
+        // never written by multiple threads at the same time.
+        let _file_guard = self.save_lock.lock_unpoisoned();
+        let map = self.inner.lock_unpoisoned();
         let content = serde_json::to_string_pretty(&*map)?;
         fs::write(&self.path, content)?;
         Ok(())
     }
 
     pub fn clear(&self) -> anyhow::Result<()> {
-        let mut map = self.inner.lock().unwrap();
+        let _file_guard = self.save_lock.lock_unpoisoned();
+        let mut map = self.inner.lock_unpoisoned();
         map.clear();
         let content = serde_json::to_string_pretty(&*map)?;
         fs::write(&self.path, content)?;

@@ -21,6 +21,20 @@ use gtk4::prelude::*;
 use libadwaita::prelude::*;
 use glib::clone;
 
+/// Extension trait that ignores mutex poisoning.  A panic in a GTK callback
+/// would otherwise poison every mutex it was holding and crash the app on the
+/// next lock.  With this helper the app keeps running; the guard may see
+/// partially-updated state, but that is still better than a cascade of panics.
+pub trait MutexExt<T> {
+    fn lock_unpoisoned(&self) -> std::sync::MutexGuard<'_, T>;
+}
+
+impl<T> MutexExt<T> for std::sync::Mutex<T> {
+    fn lock_unpoisoned(&self) -> std::sync::MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 struct ProgressState {
     done:         AtomicUsize,
     total:        AtomicUsize,
@@ -107,7 +121,7 @@ fn add_dir_row(
     select_by_btn: &gtk4::MenuButton,
     no_ref_filter_btn: &gtk4::ToggleButton,
 ) {
-    let mut d = dirs.lock().unwrap();
+    let mut d = dirs.lock_unpoisoned();
     if d.contains(&path.to_string()) { return; }
     d.push(path.to_string());
     drop(d);
@@ -134,7 +148,7 @@ fn add_dir_row(
     let dir_list2 = dir_list.clone();
     ref_cb.connect_toggled(move |cb| {
         if cb.is_active() {
-            let mut rd = dir_refs.lock().unwrap();
+            let mut rd = dir_refs.lock_unpoisoned();
             rd.clear();
             rd.insert(dtext.clone());
             drop(rd);
@@ -162,7 +176,7 @@ fn add_dir_row(
             nrf.set_visible(true);
             nrf.set_active(false);
         } else {
-            let mut rd = dir_refs.lock().unwrap();
+            let mut rd = dir_refs.lock_unpoisoned();
             rd.remove(&dtext);
             dir_lbl.set_css_classes(&[]);
             sbb.set_visible(rd.is_empty());
@@ -171,7 +185,7 @@ fn add_dir_row(
             drop(rd);
         }
         refresh_all_ref_styling(&rd_for_refresh, &rd_for_refresh2);
-        save_settings(&as3, &rot3, &thr3, &*dirs3.lock().unwrap(), &*refs4.lock().unwrap());
+        save_settings(&as3, &rot3, &thr3, &dirs3.lock_unpoisoned(), &refs4.lock_unpoisoned());
     });
     if is_ref { ref_cb.set_active(true); }
 
@@ -192,13 +206,13 @@ fn add_dir_row(
         let t = lbl2.text().to_string();
 
         {
-            let mut d = dirs2.lock().unwrap();
+            let mut d = dirs2.lock_unpoisoned();
             d.retain(|x| *x != t);
             if d.is_empty() { scan2.set_sensitive(false); }
         } // dirs lock released here
 
         {
-            let mut rd = dir_refs2.lock().unwrap();
+            let mut rd = dir_refs2.lock_unpoisoned();
             rd.remove(&t);
         } // ref_dirs lock released here
 
@@ -207,7 +221,7 @@ fn add_dir_row(
             dir_list2.set_visible(false);
         }
 
-        save_settings(&as2, &rot2, &thr2, &*dirs5.lock().unwrap(), &*refs3.lock().unwrap());
+        save_settings(&as2, &rot2, &thr2, &dirs5.lock_unpoisoned(), &refs3.lock_unpoisoned());
     });
 
     hbox.append(&lbl);
@@ -254,56 +268,76 @@ fn build_ui(app: &libadwaita::Application) {
     let threshold_val = Arc::new(AtomicU32::new(app_settings.threshold));
 
     let provider = gtk4::CssProvider::new();
-    provider.load_from_string(
-          ".ref-image { border: 3px solid @success_color; border-radius: 6px; }\
-          .ref-label-green { color: @success_color; font-weight: 600; }\
-          .ref-path { color: @accent_color; font-weight: 600; }\
-         .dir-list { border: 1px solid @borders; border-radius: 6px; background: @card_bg_color; }\
-         .error { color: @error_color; font-weight: bold; }\
-         .deleted { background: alpha(@error_color, 0.08); border-left: 3px solid @error_color; padding-left: 3px; }\
-         .deleted label { color: @error_color; text-decoration: line-through; }\
-         .deleted button label { text-decoration: none; color: @window_fg_color; }\
-         .deleted .dim-label { color: alpha(@error_color, 0.6); }\
-         .moved { background: alpha(@success_color, 0.06); border-left: 3px solid @success_color; padding-left: 3px; }\
-         .moved label { color: @success_color; }\
-         .moved button label { color: @window_fg_color; }\
-         .moved .dim-label { color: alpha(@success_color, 0.6); }\
-           .group-frame { border: 1px solid @borders; border-radius: 8px; background: @card_bg_color; transition: all 150ms ease; }\
-           .group-frame:hover { border-color: alpha(@accent_color, 0.3); box-shadow: 0 1px 4px alpha(black, 0.08); }\
+    provider.load_from_string(r#"
+        .ref-image { border: 3px solid @success_color; border-radius: 6px; }
+        .ref-label-green { color: @success_color; font-weight: 600; }
+        .ref-path { color: @accent_color; font-weight: 600; }
+        .dir-list { border: 1px solid @borders; border-radius: 6px; background: @card_bg_color; }
+        .error { color: @error_color; font-weight: bold; }
+        .deleted { background: alpha(@error_color, 0.08); border-left: 3px solid @error_color; padding-left: 3px; }
+        .deleted label { color: @error_color; text-decoration: line-through; }
+        .deleted button label { text-decoration: none; color: @window_fg_color; }
+        .deleted .dim-label { color: alpha(@error_color, 0.6); }
+        .moved { background: alpha(@success_color, 0.06); border-left: 3px solid @success_color; padding-left: 3px; }
+        .moved label { color: @success_color; }
+        .moved button label { color: @window_fg_color; }
+        .moved .dim-label { color: alpha(@success_color, 0.6); }
+        .group-frame { border: 1px solid @borders; border-radius: 8px; background: @card_bg_color; transition: all 150ms ease; }
+        .group-frame:hover { border-color: alpha(@accent_color, 0.3); box-shadow: 0 1px 4px alpha(black, 0.08); }
 
-          .result-row { padding: 5px 8px; padding-left: 9px; border-radius: 4px; border-left: 3px solid transparent; transition: background 100ms ease; }\
-          .result-row:hover { background: alpha(@accent_color, 0.04); }\
-          .result-row:selected { background: alpha(@accent_color, 0.1); }\
-          .ref-row { background: alpha(@accent_color, 0.08); border-left: 3px solid @accent_color; }\
+        .result-row { padding: 5px 8px; padding-left: 9px; border-radius: 4px; border-left: 3px solid transparent; transition: background 100ms ease; }
+        .result-row:hover { background: alpha(@accent_color, 0.04); }
+        .result-row:selected { background: alpha(@accent_color, 0.1); }
+        .ref-row { background: alpha(@accent_color, 0.08); border-left: 3px solid @accent_color; }
 
-         .toolbar-box { background: @card_bg_color; border: 1px solid @borders; border-radius: 8px; padding: 6px 8px; }\
+        .toolbar-box { background: @card_bg_color; border: 1px solid @borders; border-radius: 8px; padding: 6px 8px; }
 
-          .group-header-btn { margin: 0 2px; }\
-          .group-toggle { min-width: 20px; min-height: 20px; padding: 0; margin: 0 2px; }\
+        .group-header-btn { margin: 0 2px; }
+        .group-toggle { min-width: 20px; min-height: 20px; padding: 0; margin: 0 2px; }
 
-         .group-header { background: alpha(@accent_color, 0.04); border-bottom: 1px solid alpha(@accent_color, 0.15); padding: 6px 0; }\
-           .column-header { font-weight: 600; color: @insensitive_fg_color; padding: 2px 6px; }\
-          .dim-label { padding: 2px 6px; }\
-          .col-header-row { background: alpha(@accent_color, 0.04); border-bottom: 2px solid alpha(@accent_color, 0.15); margin-bottom: 4px; padding: 4px 8px; padding-left: 9px; border-radius: 4px 4px 0 0; }\
-         .status-pill { background: alpha(@accent_color, 0.08); border-radius: 12px; padding: 2px 10px; font-weight: 600; }\
-           .status-pill-ref { background: alpha(@success_color, 0.12); color: @success_color; border-radius: 10px; padding: 2px 8px; font-weight: 600; font-size: 0.8em; }\
-          .status-pill-hidden { padding: 2px 8px; font-size: 0.8em; }\
-         .status-pill-rot { background: alpha(@warning_color, 0.15); color: @warning_color; border-radius: 12px; padding: 2px 10px; font-weight: 600; font-size: 0.85em; }\
-         viewport, scrolledwindow, list, box { border: none; background: transparent; }\
-         .card { background: @card_bg_color; border: 1px solid @borders; border-radius: 8px; padding: 8px; transition: all 150ms ease; }\
-         .card:hover { border-color: alpha(@accent_color, 0.3); }\
-         .preview-separator { margin: 8px 0; }\
-         .group-count-badge { background: alpha(@accent_color, 0.1); border-radius: 10px; padding: 1px 8px; font-size: 0.8em; color: @accent_color; font-weight: 600; }\
-         .filter-active { background: @accent_color; color: white; border-radius: 4px; }\
-         .success { color: @success_color; font-weight: 600; }\
-         .small { padding: 2px 8px; font-size: 0.9em; min-height: 24px; }\
-         .no-results { font-size: 1.2em; color: @insensitive_fg_color; }"
-    );
+        .group-header { background: alpha(@accent_color, 0.04); border-bottom: 1px solid alpha(@accent_color, 0.15); padding: 6px 0; }
+        .column-header { font-weight: 600; color: @insensitive_fg_color; padding: 2px 6px; }
+        .dim-label { padding: 2px 6px; }
+        .col-header-row { background: alpha(@accent_color, 0.04); border-bottom: 2px solid alpha(@accent_color, 0.15); margin-bottom: 4px; padding: 4px 8px; padding-left: 9px; border-radius: 4px 4px 0 0; }
+        .status-pill { background: alpha(@accent_color, 0.08); border-radius: 12px; padding: 2px 10px; font-weight: 600; }
+        .status-pill-ref { background: alpha(@success_color, 0.12); color: @success_color; border-radius: 10px; padding: 2px 8px; font-weight: 600; font-size: 0.8em; }
+        .status-pill-hidden { padding: 2px 8px; font-size: 0.8em; }
+        .status-pill-rot { background: alpha(@warning_color, 0.15); color: @warning_color; border-radius: 12px; padding: 2px 10px; font-weight: 600; font-size: 0.85em; }
+        viewport, scrolledwindow, list, box { border: none; background: transparent; }
+        .card { background: @card_bg_color; border: 1px solid @borders; border-radius: 8px; padding: 8px; transition: all 150ms ease; }
+        .card:hover { border-color: alpha(@accent_color, 0.3); }
+        .preview-separator { margin: 8px 0; }
+        .group-count-badge { background: alpha(@accent_color, 0.1); border-radius: 10px; padding: 1px 8px; font-size: 0.8em; color: @accent_color; font-weight: 600; }
+        .filter-active { background: @accent_color; color: white; border-radius: 4px; }
+        .success { color: @success_color; font-weight: 600; }
+        .small { padding: 2px 8px; font-size: 0.9em; min-height: 24px; }
+        .no-results { font-size: 1.2em; color: @insensitive_fg_color; }
+    "#);
     if let Some(display) = gtk4::gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(&display, &provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
-        // Register icon search path so "imphash" icon name resolves
+        // Register icon search path so "imphash" icon name resolves.
+        // Try paths relative to the executable first, then fall back to the
+        // current working directory for development builds.
         let icon_theme = gtk4::IconTheme::for_display(&display);
-        icon_theme.add_search_path("assets/icons");
+        let mut added = false;
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                let candidates = [
+                    exe_dir.join("assets/icons"),
+                    exe_dir.join("../share/icons"),
+                    exe_dir.join("../../share/icons"),
+                ];
+                for path in candidates {
+                    if path.is_dir() {
+                        icon_theme.add_search_path(&path);
+                        added = true;
+                    }
+                }
+            }
+        }
+        if !added {
+            icon_theme.add_search_path("assets/icons");
+        }
     }
 
     // --- Window ---
@@ -460,8 +494,8 @@ fn build_ui(app: &libadwaita::Application) {
         add_dir_row(dir, is_ref, &dirs, &ref_dirs, &dir_list,
             &scan_btn, &results_data, &auto_save, &rotation_enabled, &threshold_val, &select_by_btn, &no_ref_filter_btn);
     }
-    select_by_btn.set_visible(ref_dirs.lock().unwrap().is_empty());
-    no_ref_filter_btn.set_visible(!ref_dirs.lock().unwrap().is_empty());
+    select_by_btn.set_visible(ref_dirs.lock_unpoisoned().is_empty());
+    no_ref_filter_btn.set_visible(!ref_dirs.lock_unpoisoned().is_empty());
 
     // --- Select By popover ---
     let popover = gtk4::PopoverMenu::from_model(None::<&gtk4::gio::MenuModel>);
@@ -501,7 +535,7 @@ fn build_ui(app: &libadwaita::Application) {
             #[strong] status_label, move |_| {
             small_for_big.set_css_classes(&[]);
             big1.set_css_classes(&["filter-active"]);
-            let data = results_data.lock().unwrap();
+            let data = results_data.lock_unpoisoned();
             apply_select_by(&data, &selection, mode_base, &status_label);
         }));
         let big_for_small = big.clone();
@@ -510,7 +544,7 @@ fn build_ui(app: &libadwaita::Application) {
             #[strong] status_label, move |_| {
             big_for_small.set_css_classes(&[]);
             small1.set_css_classes(&["filter-active"]);
-            let data = results_data.lock().unwrap();
+            let data = results_data.lock_unpoisoned();
             apply_select_by(&data, &selection, mode_base + 1, &status_label);
         }));
         row.append(&lbl);
@@ -524,8 +558,8 @@ fn build_ui(app: &libadwaita::Application) {
                 #[strong] stats_label, #[weak] move_sel_btn, #[weak] trash_sel_btn, move |_| {
                 cancel_big.set_css_classes(&[]);
                 cancel_small.set_css_classes(&[]);
-                selection.lock().unwrap().clear();
-                let data = results_data.lock().unwrap();
+                selection.lock_unpoisoned().clear();
+                let data = results_data.lock_unpoisoned();
                 for gd in data.iter() {
                     for fd in gd.files.iter() {
                         fd.check.set_active(false);
@@ -592,7 +626,7 @@ fn build_ui(app: &libadwaita::Application) {
                     };
                     add_dir_row(&path, false, &dirs, &ref_dirs, &dir_list,
                         &scan_btn, &rdata2, &as2, &rot2, &thr2, &select_by_btn, &no_ref_filter_btn);
-                    save_settings(&as2, &rot2, &thr2, &*dirs2.lock().unwrap(), &*refs2.lock().unwrap());
+                    save_settings(&as2, &rot2, &thr2, &dirs2.lock_unpoisoned(), &refs2.lock_unpoisoned());
                     status_label.set_text("");
                 },
             );
@@ -635,7 +669,7 @@ fn build_ui(app: &libadwaita::Application) {
         let dir_list = dir_list.clone();
         let window = window.clone();
         select_all_btn.connect_clicked(move |_| {
-            if ref_dirs_clone.lock().unwrap().is_empty() {
+            if ref_dirs_clone.lock_unpoisoned().is_empty() {
                 let dialog = libadwaita::AlertDialog::builder()
                     .heading("No reference directory configured")
                     .body("All files will be selected because no reference directory is set. What would you like to do?")
@@ -660,7 +694,7 @@ fn build_ui(app: &libadwaita::Application) {
                     match response {
                         "select_ref" => {
                             let dir_list_snapshot: Vec<String> = {
-                                let d = dirs2.lock().unwrap();
+                                let d = dirs2.lock_unpoisoned();
                                 d.clone()
                             };
                             if dir_list_snapshot.is_empty() {
@@ -706,7 +740,7 @@ fn build_ui(app: &libadwaita::Application) {
                                     let idx = dropdown.selected() as usize;
                                     if idx >= dir_snap2.len() { return; }
                                     let path = &dir_snap2[idx];
-                                    ref_dirs3.lock().unwrap().insert(path.clone());
+                                    ref_dirs3.lock_unpoisoned().insert(path.clone());
                                     refresh_all_ref_styling(&rd_for_refresh, &rd_for_refresh2);
                                     let mut i = 0;
                                     while let Some(r) = dir_list3.row_at_index(i) {
@@ -769,8 +803,8 @@ fn build_ui(app: &libadwaita::Application) {
 
     clear_sel_btn.connect_clicked(clone!(#[strong] selection, #[strong] results_data,
         #[weak] move_sel_btn, #[weak] trash_sel_btn, #[weak] stats_label, move |_| {
-        selection.lock().unwrap().clear();
-        let data = results_data.lock().unwrap();
+        selection.lock_unpoisoned().clear();
+        let data = results_data.lock_unpoisoned();
         for gd in data.iter() {
             for fd in gd.files.iter() {
                 fd.check.set_active(false);
@@ -783,14 +817,14 @@ fn build_ui(app: &libadwaita::Application) {
 
     invert_sel_btn.connect_clicked(clone!(#[strong] selection, #[strong] results_data,
         #[weak] move_sel_btn, #[weak] trash_sel_btn, #[weak] stats_label, move |_| {
-        let data = results_data.lock().unwrap();
+        let data = results_data.lock_unpoisoned();
         for gd in data.iter() {
             for fd in gd.files.iter() {
                 fd.check.set_active(!fd.check.is_active());
             }
         }
         drop(data);
-        let n = selection.lock().unwrap().len();
+        let n = selection.lock_unpoisoned().len();
         move_sel_btn.set_sensitive(n > 0);
         trash_sel_btn.set_sensitive(n > 0);
         stats_label.set_text(&format!("Selected: {}", n));
@@ -798,7 +832,7 @@ fn build_ui(app: &libadwaita::Application) {
 
     no_ref_filter_btn.connect_toggled(clone!(#[strong] results_data, move |btn| {
         let active = btn.is_active();
-        let data = results_data.lock().unwrap();
+        let data = results_data.lock_unpoisoned();
         for gd in data.iter() {
             let has_ref = gd.files.iter().any(|f| f.reference);
             let visible = !active || !has_ref;
@@ -814,7 +848,7 @@ fn build_ui(app: &libadwaita::Application) {
 
     trash_sel_btn.connect_clicked(clone!(#[strong] selection, #[strong] status_label, 
         #[strong] window, #[strong] results_data, #[strong] preview_widgets, move |_| {
-        let paths: Vec<String> = selection.lock().unwrap().iter().cloned().collect();
+        let paths: Vec<String> = selection.lock_unpoisoned().iter().cloned().collect();
         let n = paths.len();
         if n == 0 { return; }
 
@@ -837,14 +871,14 @@ fn build_ui(app: &libadwaita::Application) {
         let pw = preview_widgets.clone();
         dialog.connect_response(None, move |_, response| {
             if response != "trash" { return; }
-            let paths_to_trash: Vec<String> = sel.lock().unwrap().iter().cloned().collect();
+            let paths_to_trash: Vec<String> = sel.lock_unpoisoned().iter().cloned().collect();
             let mut ok = 0usize;
             for p in &paths_to_trash {
                 if let Err(e) = trash::delete(p) {
                     sl.set_text(&format!("Failed to trash {}: {}", p, e));
                 } else {
                     ok += 1;
-                    let data = rd.lock().unwrap();
+                    let data = rd.lock_unpoisoned();
                     for group in data.iter() {
                         for file in group.files.iter() {
                             if file.path == *p {
@@ -856,7 +890,7 @@ fn build_ui(app: &libadwaita::Application) {
                             }
                         }
                     }
-                    if let Some(pw_ref) = pw.lock().unwrap().get(p) {
+                    if let Some(pw_ref) = pw.lock_unpoisoned().get(p) {
                         pw_ref.picture.set_visible(false);
                         pw_ref.status_icon.set_icon_name(Some("user-trash-symbolic"));
                         pw_ref.status_overlay_label.set_text("Moved to trash");
@@ -865,7 +899,18 @@ fn build_ui(app: &libadwaita::Application) {
                     }
                 }
             }
-            sel.lock().unwrap().clear();
+            sel.lock_unpoisoned().clear();
+            // Uncheck the trashed (or failed) items so UI matches the empty selection.
+            {
+                let data = rd.lock_unpoisoned();
+                for group in data.iter() {
+                    for file in group.files.iter() {
+                        if paths_to_trash.contains(&file.path) {
+                            file.check.set_active(false);
+                        }
+                    }
+                }
+            }
             if ok == paths_to_trash.len() {
                 sl.set_text(&format!("Moved {} {} to trash", ok, if ok == 1 { "file" } else { "files" }));
             }
@@ -875,7 +920,7 @@ fn build_ui(app: &libadwaita::Application) {
 
     move_sel_btn.connect_clicked(clone!(#[strong] selection, #[strong] status_label,
         #[strong] window, #[strong] results_data, #[strong] preview_widgets, move |_| {
-        let paths: Vec<String> = selection.lock().unwrap().iter().cloned().collect();
+        let paths: Vec<String> = selection.lock_unpoisoned().iter().cloned().collect();
         if paths.is_empty() { return; }
 
         let dialog = gtk4::FileDialog::new();
@@ -895,7 +940,7 @@ fn build_ui(app: &libadwaita::Application) {
                         let n = paths2.len();
                         let confirm = gtk4::AlertDialog::builder()
                             .message("Move selected files?")
-                            .detail(&format!("This will move {} file(s) to:\n{}", n, dest.display()))
+                            .detail(format!("This will move {} file(s) to:\n{}", n, dest.display()))
                             .buttons(["Move", "Cancel"])
                             .build();
                         
@@ -905,74 +950,114 @@ fn build_ui(app: &libadwaita::Application) {
                         let dest2 = dest.clone();
                         let rd2 = rd.clone();
                         let pw2 = pw.clone();
+                        let win2 = win.clone();
                         confirm.choose(Some(&win), None::<&gtk4::gio::Cancellable>, move |confirm_result| {
                             if !matches!(confirm_result, Ok(0)) { return; }
-                            
-                            let mut ok = 0usize;
-                            for p in &paths3 {
-                                let src = std::path::Path::new(p);
-                                let name = src.file_name().unwrap_or_default();
-                                let target = dest2.join(name);
-                                // Try rename first (fast, same filesystem),
-                                // fall back to copy + remove.
-                                let dest_str = target.display().to_string();
-                                if std::fs::rename(p, &target).is_ok() {
-                                    ok += 1;
-                                    // Update main window FileData
-                                    let data = rd2.lock().unwrap();
-                                    for group in data.iter() {
-                                        for file in group.files.iter() {
-                                            if file.path == *p {
-                                                let msg = format!("→ Moved to {}", dest_str);
-                                                file.moved_label.set_text(&msg);
-                                                file.moved_label.set_visible(true);
-                                                file.move_btn.set_visible(false);
+
+                            let targets: Vec<std::path::PathBuf> = paths3.iter()
+                                .map(|p| {
+                                    let src = std::path::Path::new(p);
+                                    dest2.join(src.file_name().unwrap_or_default())
+                                })
+                                .collect();
+
+                            let conflicts: Vec<(String, std::path::PathBuf)> = paths3.iter().cloned()
+                                .zip(targets.iter().cloned())
+                                .filter(|(p, t)| t.exists() && Some(p.as_str()) != t.to_str())
+                                .collect();
+
+                            let perform_move = {
+                                let rd2 = rd2.clone();
+                                let pw2 = pw2.clone();
+                                let sl2 = sl2.clone();
+                                move |p: &str, target: &std::path::Path, dest_str: &str| -> bool {
+                                    if try_move_file(p, target) {
+                                        let data = rd2.lock_unpoisoned();
+                                        for group in data.iter() {
+                                            for file in group.files.iter() {
+                                                if file.path == p {
+                                                    let msg = format!("→ Moved to {}", dest_str);
+                                                    file.moved_label.set_text(&msg);
+                                                    file.moved_label.set_visible(true);
+                                                    file.move_btn.set_visible(false);
+                                                    file.restore_move_btn.set_visible(true);
+                                                }
                                             }
                                         }
-                                    }
-                                    // Update preview window
-                                    if let Some(pw_ref) = pw2.lock().unwrap().get(p) {
-                                        pw_ref.picture.set_visible(false);
-                                        pw_ref.status_icon.set_icon_name(Some("go-jump-symbolic"));
-                                        pw_ref.status_overlay_label.set_text("Moved to:");
-                                        pw_ref.moved_to_label.set_text(&dest_str);
-                                        pw_ref.moved_to_label.set_visible(true);
-                                        pw_ref.status_overlay_box.set_visible(true);
-                                        pw_ref.path_label.set_text(&dest_str);
-                                        pw_ref.move_btn.set_visible(false);
-                                    }
-                                } else if std::fs::copy(p, &target).is_ok()
-                                    && std::fs::remove_file(p).is_ok()
-                                {
-                                    ok += 1;
-                                    let data = rd2.lock().unwrap();
-                                    for group in data.iter() {
-                                        for file in group.files.iter() {
-                                            if file.path == *p {
-                                                let msg = format!("→ Moved to {}", dest_str);
-                                                file.moved_label.set_text(&msg);
-                                                file.moved_label.set_visible(true);
-                                                file.move_btn.set_visible(false);
-                                            }
+                                        if let Some(pw_ref) = pw2.lock_unpoisoned().get(p) {
+                                            pw_ref.picture.set_visible(false);
+                                            pw_ref.status_icon.set_icon_name(Some("go-jump-symbolic"));
+                                            pw_ref.status_overlay_label.set_text("Moved to:");
+                                            pw_ref.moved_to_label.set_text(dest_str);
+                                            pw_ref.moved_to_label.set_visible(true);
+                                            pw_ref.status_overlay_box.set_visible(true);
+                                            pw_ref.path_label.set_text(dest_str);
+                                            pw_ref.move_btn.set_visible(false);
+                                            pw_ref.restore_move_btn.set_visible(true);
                                         }
+                                        true
+                                    } else {
+                                        sl2.set_text(&format!("Failed to move: {}", p));
+                                        false
                                     }
-                                    if let Some(pw_ref) = pw2.lock().unwrap().get(p) {
-                                        pw_ref.picture.set_visible(false);
-                                        pw_ref.status_icon.set_icon_name(Some("go-jump-symbolic"));
-                                        pw_ref.status_overlay_label.set_text("Moved to:");
-                                        pw_ref.moved_to_label.set_text(&dest_str);
-                                        pw_ref.moved_to_label.set_visible(true);
-                                        pw_ref.status_overlay_box.set_visible(true);
-                                        pw_ref.path_label.set_text(&dest_str);
-                                        pw_ref.move_btn.set_visible(false);
-                                    }
-                                } else {
-                                    sl2.set_text(&format!("Failed to move: {}", p));
                                 }
-                            }
-                            sel2.lock().unwrap().clear();
-                            if ok == paths3.len() {
-                                sl2.set_text(&format!("Moved {} file(s) to {}", paths3.len(), dest2.display()));
+                            };
+
+                            let finish = {
+                                let sel2 = sel2.clone();
+                                let rd2 = rd2.clone();
+                                let sl2 = sl2.clone();
+                                let paths3 = paths3.clone();
+                                let dest2 = dest2.clone();
+                                move |ok: usize| {
+                                    sel2.lock_unpoisoned().clear();
+                                    {
+                                        let data = rd2.lock_unpoisoned();
+                                        for group in data.iter() {
+                                            for file in group.files.iter() {
+                                                if paths3.contains(&file.path) {
+                                                    file.check.set_active(false);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if ok == paths3.len() {
+                                        sl2.set_text(&format!("Moved {} file(s) to {}", paths3.len(), dest2.display()));
+                                    }
+                                }
+                            };
+
+                            let perform_move = std::rc::Rc::new(perform_move);
+                            let finish = std::rc::Rc::new(finish);
+
+                            if conflicts.is_empty() {
+                                let mut ok = 0usize;
+                                for (p, target) in paths3.iter().zip(targets.iter()) {
+                                    let dest_str = target.display().to_string();
+                                    if perform_move(p, target, &dest_str) {
+                                        ok += 1;
+                                    }
+                                }
+                                finish(ok);
+                            } else {
+                                let names: Vec<String> = conflicts.iter()
+                                    .map(|(p, t)| format!("{} → {}", p, t.display()))
+                                    .collect();
+                                let body = format!("{} file(s) already exist at the destination. Overwrite?\n\n{}",
+                                    conflicts.len(), names.join("\n"));
+                                let perform_move = perform_move.clone();
+                                let paths3 = paths3.clone();
+                                let targets = targets.clone();
+                                confirm_overwrite(&win2, "Overwrite existing files?", &body, move || {
+                                    let mut ok = 0usize;
+                                    for (p, target) in paths3.iter().zip(targets.iter()) {
+                                        let dest_str = target.display().to_string();
+                                        if perform_move(p, target, &dest_str) {
+                                            ok += 1;
+                                        }
+                                    }
+                                    finish(ok);
+                                });
                             }
                         });
                     }
@@ -1034,7 +1119,7 @@ fn build_ui(app: &libadwaita::Application) {
             #[strong] dirs, #[strong] ref_dirs, move |_, val| {
             rotation_enabled.store(val, Ordering::Relaxed);
             save_settings(&auto_save, &rotation_enabled, &threshold_val,
-                &*dirs.lock().unwrap(), &*ref_dirs.lock().unwrap());
+                &dirs.lock_unpoisoned(), &ref_dirs.lock_unpoisoned());
             glib::Propagation::Proceed
         }));
         rot_row.append(&rot_label);
@@ -1057,7 +1142,7 @@ fn build_ui(app: &libadwaita::Application) {
             let v = sb.value() as u32;
             threshold_val.store(v, Ordering::Relaxed);
             save_settings(&auto_save, &rotation_enabled, &threshold_val,
-                &*dirs.lock().unwrap(), &*ref_dirs.lock().unwrap());
+                &dirs.lock_unpoisoned(), &ref_dirs.lock_unpoisoned());
         }));
         thr_row.append(&thr_label);
         thr_row.append(&thr_spin);
@@ -1087,7 +1172,7 @@ fn build_ui(app: &libadwaita::Application) {
             #[strong] dirs, #[strong] ref_dirs, move |_, val| {
             auto_save.store(val, Ordering::Relaxed);
             save_settings(&auto_save, &rotation_enabled, &threshold_val,
-                &*dirs.lock().unwrap(), &*ref_dirs.lock().unwrap());
+                &dirs.lock_unpoisoned(), &ref_dirs.lock_unpoisoned());
             glib::Propagation::Proceed
         }));
         as_row.append(&as_label);
@@ -1115,7 +1200,7 @@ fn build_ui(app: &libadwaita::Application) {
         dialog.save(Some(&window), None::<&gtk4::gio::Cancellable>, move |result| {
             if let Ok(file) = result {
                 if let Some(path) = file.path() {
-                    let data = rd.lock().unwrap();
+                    let data = rd.lock_unpoisoned();
                     let groups: Vec<dedupe::DuplicateGroup> = data.iter().map(|gd| {
                         let files: Vec<dedupe::ImageEntry> = gd.files.iter().map(|fd| dedupe::ImageEntry {
                             path: std::path::PathBuf::from(&fd.path),
@@ -1184,9 +1269,9 @@ fn build_ui(app: &libadwaita::Application) {
                                     while let Some(child) = rbox.first_child() {
                                         rbox.remove(&child);
                                     }
-                                    rd.lock().unwrap().clear();
+                                    rd.lock_unpoisoned().clear();
                                     let dummy_progress = Arc::new(ProgressState::new());
-                                    let refs = rd2.lock().unwrap();
+                                    let refs = rd2.lock_unpoisoned();
                                     build_results(&rbox, &rd, &sel, &groups, false,
                                         &dummy_progress, &stl, &sul, &pb, &tr, &mb, &tb,
                                         &nol, &scr, &refs, &w, &pw);
@@ -1235,6 +1320,13 @@ fn build_ui(app: &libadwaita::Application) {
         let trash_btn_to_clear = trash_sel_btn.clone();
         let select_by_to_clear = select_by_btn.clone();
         let nrf_to_clear = no_ref_filter_btn.clone();
+        let cancel_flag_to_clear = cancel_flag.clone();
+        let pause_flag_to_clear = pause_flag.clone();
+        let auto_save_to_clear = auto_save.clone();
+        let rotation_enabled_to_clear = rotation_enabled.clone();
+        let threshold_val_to_clear = threshold_val.clone();
+        let cancel_btn_to_clear = cancel_btn.clone();
+        let pause_btn_to_clear = pause_btn.clone();
 
         clear_results_btn.connect_clicked(clone!(#[strong] window, move |_| {
             let dialog = libadwaita::AlertDialog::builder()
@@ -1262,13 +1354,27 @@ fn build_ui(app: &libadwaita::Application) {
             let trash_btn = trash_btn_to_clear.clone();
             let select_by = select_by_to_clear.clone();
             let nrf = nrf_to_clear.clone();
+            let cancel_flag = cancel_flag_to_clear.clone();
+            let pause_flag = pause_flag_to_clear.clone();
+            let auto_save = auto_save_to_clear.clone();
+            let rotation_enabled = rotation_enabled_to_clear.clone();
+            let threshold_val = threshold_val_to_clear.clone();
+            let cancel_btn = cancel_btn_to_clear.clone();
+            let pause_btn = pause_btn_to_clear.clone();
             dialog.connect_response(None, move |_, response| {
                 if response != "clear" { return; }
 
-                dirs.lock().unwrap().clear();
-                ref_dirs.lock().unwrap().clear();
-                results_data.lock().unwrap().clear();
-                selection.lock().unwrap().clear();
+                // Cancel any scan in progress so it doesn't repopulate the UI.
+                cancel_flag.store(true, Ordering::Relaxed);
+                pause_flag.store(false, Ordering::Relaxed);
+                btn_update(&pause_btn, "Pause", "media-playback-pause-symbolic");
+                cancel_btn.set_sensitive(false);
+                pause_btn.set_sensitive(false);
+
+                dirs.lock_unpoisoned().clear();
+                ref_dirs.lock_unpoisoned().clear();
+                results_data.lock_unpoisoned().clear();
+                selection.lock_unpoisoned().clear();
 
                 while let Some(child) = results_box.first_child() {
                     results_box.remove(&child);
@@ -1288,25 +1394,29 @@ fn build_ui(app: &libadwaita::Application) {
                 trash_btn.set_sensitive(false);
                 select_by.set_visible(true);
                 status.set_text("Cleared all search results and directories");
+
+                // Persist the cleared state if auto-save is enabled.
+                save_settings(&auto_save, &rotation_enabled, &threshold_val,
+                    &dirs.lock_unpoisoned(), &ref_dirs.lock_unpoisoned());
             });
             dialog.present(Some(&window));
         }));
     }
 
     // --- Scan handler ---
-        scan_btn.connect_clicked(clone!(#[strong] dirs, #[strong] ref_dirs, #[strong] cancel_flag, 
+        scan_btn.connect_clicked(clone!(#[strong] dirs, #[strong] ref_dirs, #[strong] cancel_flag,
         #[strong] pause_flag, #[strong] cache,
         #[strong] results_box, #[strong] no_results_label,
         #[strong] scrolled, #[strong] progress_bar, #[strong] status_label, #[strong] toolbar_revealer,
         #[strong] scan_btn, #[strong] cancel_btn, #[strong] pause_btn, #[strong] stats_label,
         #[strong] move_sel_btn, #[strong] trash_sel_btn, #[strong] results_data, #[strong] selection,
-        #[strong] window, #[strong] preview_widgets, move |_| {
-        selection.lock().unwrap().clear();
+        #[strong] window, #[strong] preview_widgets, #[strong] del_cache_btn, move |_| {
+        selection.lock_unpoisoned().clear();
         cancel_flag.store(false, Ordering::Relaxed);
         pause_flag.store(false, Ordering::Relaxed);
         btn_update(&pause_btn, "Pause", "media-playback-pause-symbolic");
 
-        let dirs_snapshot = dirs.lock().unwrap().clone();
+        let dirs_snapshot = dirs.lock_unpoisoned().clone();
         let dir_paths: Vec<PathBuf> = dirs_snapshot.iter().map(PathBuf::from).collect();
         if dir_paths.is_empty() {
             let dialog = gtk4::AlertDialog::builder()
@@ -1321,6 +1431,7 @@ fn build_ui(app: &libadwaita::Application) {
         scan_btn.set_sensitive(false);
         cancel_btn.set_sensitive(true);
         pause_btn.set_sensitive(true);
+        del_cache_btn.set_sensitive(false);
         progress_bar.set_fraction(0.0);
         progress_bar.set_show_text(true);
         status_label.set_text("Scanning directories...");
@@ -1333,7 +1444,7 @@ fn build_ui(app: &libadwaita::Application) {
         while let Some(child) = results_box.first_child() {
             results_box.remove(&child);
         }
-        results_data.lock().unwrap().clear();
+        results_data.lock_unpoisoned().clear();
 
         let progress = Arc::new(ProgressState::new());
 
@@ -1359,13 +1470,14 @@ fn build_ui(app: &libadwaita::Application) {
         let timer_cancel_btn = cancel_btn.clone();
         let timer_scan_btn = scan_btn.clone();
         let timer_pause_btn = pause_btn.clone();
+        let timer_del_cache_btn = del_cache_btn.clone();
         let timer_stats = stats_label.clone();
         let timer_progress = progress.clone();
         let timer_status = status_label.clone();
         let timer_bar = progress_bar.clone();
         let rd = results_data.clone();
         let sel = selection.clone();
-        let ref_snapshot = ref_dirs.lock().unwrap().clone();
+        let ref_snapshot = ref_dirs.lock_unpoisoned().clone();
         let timer_window = window.clone();
         let timer_preview = preview_widgets.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
@@ -1376,6 +1488,7 @@ fn build_ui(app: &libadwaita::Application) {
                         timer_cancel_btn.set_sensitive(false);
                         timer_pause_btn.set_sensitive(false);
                         timer_scan_btn.set_sensitive(true);
+                        timer_del_cache_btn.set_sensitive(true);
                     }
                     ScanMsg::NoImages => {
                         timer_status.set_text("No images found");
@@ -1383,6 +1496,7 @@ fn build_ui(app: &libadwaita::Application) {
                         timer_cancel_btn.set_sensitive(false);
                         timer_pause_btn.set_sensitive(false);
                         timer_scan_btn.set_sensitive(true);
+                        timer_del_cache_btn.set_sensitive(true);
                         timer_no_results.set_visible(true);
                     }
                     ScanMsg::Found(n) => {
@@ -1397,6 +1511,7 @@ fn build_ui(app: &libadwaita::Application) {
                         timer_cancel_btn.set_sensitive(false);
                         timer_pause_btn.set_sensitive(false);
                         timer_scan_btn.set_sensitive(true);
+                        timer_del_cache_btn.set_sensitive(true);
                         timer_bar.set_fraction(1.0);
                         return glib::ControlFlow::Break;
                     }
@@ -1405,6 +1520,7 @@ fn build_ui(app: &libadwaita::Application) {
                         timer_cancel_btn.set_sensitive(false);
                         timer_pause_btn.set_sensitive(false);
                         timer_scan_btn.set_sensitive(true);
+                        timer_del_cache_btn.set_sensitive(true);
                         return glib::ControlFlow::Break;
                     }
                 }
@@ -1420,7 +1536,7 @@ fn build_ui(app: &libadwaita::Application) {
             let (frac, msg) = if is_hashing {
                 let p = (done as f64 / total.max(1) as f64) * 0.85 + 0.05;
                 let percent = ((done as f64 / total.max(1) as f64) * 85.0 + 5.0) as i32;
-                let file = timer_progress.current_file.lock().unwrap().clone();
+                let file = timer_progress.current_file.lock_unpoisoned().clone();
                 let m = if failed > 0 {
                     if let Some(ref f) = file {
                         format!("Hashing: {}/{} ({} failed) — {} — {}%", done, total, failed, f, percent)
@@ -1445,7 +1561,7 @@ fn build_ui(app: &libadwaita::Application) {
                 };
                 (p, m)
             };
-            timer_bar.set_fraction(frac as f64);
+            timer_bar.set_fraction(frac);
             timer_status.set_text(&msg);
             glib::ControlFlow::Continue
         });
@@ -1485,7 +1601,7 @@ fn build_ui(app: &libadwaita::Application) {
                     }
                     let is_hash = !cur_file.is_empty();
                     if is_hash {
-                        *progress.current_file.lock().unwrap() = Some(cur_file.to_string());
+                        *progress.current_file.lock_unpoisoned() = Some(cur_file.to_string());
                     }
                     progress.done.store(done, Ordering::Relaxed);
                     progress.total.store(total, Ordering::Relaxed);
@@ -1560,7 +1676,7 @@ fn refresh_all_ref_styling(
     results_data: &Arc<Mutex<Vec<GroupData>>>,
     ref_dirs: &Arc<Mutex<HashSet<String>>>,
 ) {
-    let mut data = results_data.lock().unwrap();
+    let mut data = results_data.lock_unpoisoned();
     for gd in data.iter_mut() {
         for fd in gd.files.iter_mut() {
             let is_ref = is_ref_path(&fd.path, ref_dirs);
@@ -1570,7 +1686,7 @@ fn refresh_all_ref_styling(
 }
 
 fn is_ref_path(path: &str, ref_dirs: &Mutex<HashSet<String>>) -> bool {
-    let rd = ref_dirs.lock().unwrap();
+    let rd = ref_dirs.lock_unpoisoned();
     rd.iter().any(|d| {
         if !path.starts_with(d) { return false; }
         let rem = &path[d.len()..];
@@ -1586,7 +1702,7 @@ fn do_select_all(
     trash_sel_btn: &gtk4::Button,
     stats_label: &gtk4::Label,
 ) {
-    let data = results_data.lock().unwrap();
+    let data = results_data.lock_unpoisoned();
     let mut to_select: Vec<String> = Vec::new();
     let mut skipped = 0usize;
     for gd in data.iter() {
@@ -1604,7 +1720,7 @@ fn do_select_all(
     let n = to_select.len();
 
     {
-        let mut sel = selection.lock().unwrap();
+        let mut sel = selection.lock_unpoisoned();
         sel.clear();
         for p in &to_select {
             sel.insert(p.clone());
@@ -1887,7 +2003,7 @@ fn build_results(results_box: &gtk4::Box,
         files_box.append(&col_header);
 
         let mut file_datas = Vec::new();
-        for (_fi, entry) in group.files.iter().enumerate() {
+        for entry in group.files.iter() {
             let path_str = entry.path.to_string_lossy().to_string();
             let dir_ref = ref_dirs.iter().any(|d| path_str.starts_with(d) && {
                 let rem = &path_str[d.len()..];
@@ -1949,6 +2065,7 @@ fn build_results(results_box: &gtk4::Box,
             let rmb_row = row.clone();
             let rmb_was_ref = is_ref;
             let rmb_status = status_label.clone();
+            let rmb_window = window.clone();
             restore_move_btn.connect_clicked(move |_| {
                 let dest_text = rmb_moved_label.text().to_string();
                 let dest = dest_text.strip_prefix("→ ").unwrap_or(&dest_text).to_string();
@@ -1957,14 +2074,16 @@ fn build_results(results_box: &gtk4::Box,
                     return;
                 }
                 let target = std::path::Path::new(&rmb_path);
-                if target.parent().map_or(false, |p| !p.exists()) {
+                if target.parent().is_some_and(|p| !p.exists()) {
                     rmb_status.set_text("Original directory no longer exists");
                     return;
                 }
-                if std::fs::rename(&dest, &rmb_path).is_ok()
-                    || (std::fs::copy(&dest, &rmb_path).is_ok() && std::fs::remove_file(&dest).is_ok())
-                {
-                    rmb_status.set_text(&format!("Restored to: {}", rmb_path));
+                let rmb = rmb.clone();
+                let rmb_move_btn = rmb_move_btn.clone();
+                let rmb_moved_label = rmb_moved_label.clone();
+                let rmb_row = rmb_row.clone();
+                let rmb_status = rmb_status.clone();
+                restore_moved_file(&rmb_path, &dest, &rmb_window, &rmb_status, move || {
                     rmb.set_visible(false);
                     rmb_move_btn.set_visible(true);
                     rmb_moved_label.set_visible(false);
@@ -1973,9 +2092,7 @@ fn build_results(results_box: &gtk4::Box,
                     } else {
                         rmb_row.set_css_classes(&["result-row"]);
                     }
-                } else {
-                    rmb_status.set_text(&format!("Failed to restore: {}", dest));
-                }
+                });
             });
             if is_ref {
                 row.set_css_classes(&["result-row", "ref-row"]);
@@ -2036,7 +2153,7 @@ fn build_results(results_box: &gtk4::Box,
 
             check.connect_toggled(clone!(#[strong] selection, #[strong] path_str,
                 #[weak] stats_label, #[weak] move_sel_btn, #[weak] trash_sel_btn, move |cb| {
-                let mut sel = selection.lock().unwrap();
+                let mut sel = selection.lock_unpoisoned();
                 if cb.is_active() {
                     sel.insert(path_str.clone());
                 } else {
@@ -2120,38 +2237,24 @@ fn build_results(results_box: &gtk4::Box,
             let restored_restore = restore_btn.clone();
             let rp = path_str.clone();
             let was_ref = is_ref;
+            let win_for_restore = window.clone();
             restore_btn.connect_clicked(move |_| {
-                let items = match trash::os_limited::list() {
-                    Ok(items) => items,
-                    Err(e) => {
-                        sl_for_restore.set_text(&format!("Failed to list trash: {}", e));
-                        return;
+                let restored_row = restored_row.clone();
+                let restored_deleted = restored_deleted.clone();
+                let restored_trash = restored_trash.clone();
+                let restored_move = restored_move.clone();
+                let restored_restore = restored_restore.clone();
+                restore_from_trash(&rp, &win_for_restore, &sl_for_restore, move || {
+                    restored_deleted.set_visible(false);
+                    restored_trash.set_visible(true);
+                    restored_move.set_visible(true);
+                    restored_restore.set_visible(false);
+                    if was_ref {
+                        restored_row.set_css_classes(&["result-row", "ref-row"]);
+                    } else {
+                        restored_row.set_css_classes(&["result-row"]);
                     }
-                };
-                let to_restore: Vec<trash::TrashItem> = items.into_iter()
-                    .filter(|item| item.original_path() == std::path::Path::new(&rp))
-                    .collect();
-                if to_restore.is_empty() {
-                    sl_for_restore.set_text("File not found in trash");
-                    return;
-                }
-                match trash::os_limited::restore_all(to_restore) {
-                    Ok(()) => {
-                        sl_for_restore.set_text(&format!("Restored: {}", rp));
-                        restored_deleted.set_visible(false);
-                        restored_trash.set_visible(true);
-                        restored_move.set_visible(true);
-                        restored_restore.set_visible(false);
-                        if was_ref {
-                            restored_row.set_css_classes(&["result-row", "ref-row"]);
-                        } else {
-                            restored_row.set_css_classes(&["result-row"]);
-                        }
-                    }
-                    Err(e) => {
-                        sl_for_restore.set_text(&format!("Failed to restore: {}", e));
-                    }
-                }
+                });
             });
 
             // Mark files that no longer exist on disk (e.g. after importing saved results)
@@ -2195,7 +2298,7 @@ fn build_results(results_box: &gtk4::Box,
             let group_num = gi + 1;
             group_view_btn.connect_clicked(move |_| {
                 let entries: Vec<(String, bool)> = {
-                    let data = rd.lock().unwrap();
+                    let data = rd.lock_unpoisoned();
                     data.iter()
                         .flat_map(|gd| gd.files.iter())
                         .filter(|fd| paths.contains(&fd.path))
@@ -2234,7 +2337,7 @@ fn build_results(results_box: &gtk4::Box,
         new_data.push(GroupData { toggle_btn, revealer, files: file_datas });
     }
 
-    *results_data.lock().unwrap() = new_data;
+    *results_data.lock_unpoisoned() = new_data;
 
     let f = progress.failed.load(Ordering::Relaxed);
     let status = if was_cancelled {
@@ -2280,7 +2383,7 @@ fn apply_select_by(data: &[GroupData],
         }
     }
     // Clear selection without holding lock during set_active calls
-    selection.lock().unwrap().clear();
+    selection.lock_unpoisoned().clear();
 
     if mode != 2 && mode != 3 {
         // Synchronous per-group best selection
@@ -2376,8 +2479,8 @@ fn apply_select_by(data: &[GroupData],
             by_group.entry(*gi).or_default().push(path.clone());
         }
         let mut skipped = 0usize;
-        let matching: HashSet<String> = by_group.into_iter()
-            .filter_map(|(_gi, paths)| {
+        let matching: HashSet<String> = by_group.into_values()
+            .filter_map(|paths| {
                 let areas: Vec<u64> = paths.iter().filter_map(|p| path_area.get(p).copied()).collect();
                 if areas.len() > 1 && areas.iter().min() == areas.iter().max() {
                     skipped += 1;
@@ -2403,7 +2506,7 @@ fn apply_select_by(data: &[GroupData],
                 for (path, check) in &path_to_check {
                     check.set_active(matching.contains(path));
                 }
-                let count = sel.lock().unwrap().len();
+                let count = sel.lock_unpoisoned().len();
                 if skipped > 0 {
                     sl.set_text(&format!("Selected {} files ({} groups skipped - all identical)", count, skipped));
                 } else {
@@ -2433,33 +2536,176 @@ fn load_pixbuf_scaled(path: &str, max_size: i32) -> Option<gdk_pixbuf::Pixbuf> {
     }
 }
 
+/// Try to move `src` to `target`.  Uses `rename` when possible, otherwise
+/// copies and removes the source.  Returns `true` on success.
+fn try_move_file(src: &str, target: &std::path::Path) -> bool {
+    std::fs::rename(src, target).is_ok()
+        || (std::fs::copy(src, target).is_ok() && std::fs::remove_file(src).is_ok())
+}
+
+/// Show a destructive confirmation dialog when a move/restore would overwrite
+/// existing files.  `on_confirmed` is only called if the user chooses Overwrite.
+fn confirm_overwrite<F>(
+    window: &impl IsA<gtk4::Window>,
+    heading: &str,
+    body: &str,
+    on_confirmed: F,
+) where F: FnOnce() + 'static {
+    let dialog = libadwaita::AlertDialog::builder()
+        .heading(heading)
+        .body(body)
+        .build();
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("overwrite", "Overwrite");
+    dialog.set_response_appearance("overwrite", libadwaita::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    let on_confirmed = std::rc::Rc::new(std::cell::Cell::new(Some(on_confirmed)));
+    dialog.connect_response(None, move |_, response| {
+        if response == "overwrite" {
+            if let Some(cb) = on_confirmed.take() {
+                cb();
+            }
+        }
+    });
+    dialog.present(Some(window.upcast_ref::<gtk4::Window>()));
+}
+
+/// Restore a file from the trash to its original path, asking for overwrite
+/// confirmation if the original path already exists.
+fn restore_from_trash<F>(
+    path: &str,
+    window: &impl IsA<gtk4::Window>,
+    status_label: &gtk4::Label,
+    on_success: F,
+) where F: FnOnce() + 'static {
+    let items = match trash::os_limited::list() {
+        Ok(items) => items,
+        Err(e) => {
+            status_label.set_text(&format!("Failed to list trash: {}", e));
+            return;
+        }
+    };
+    let path = path.to_owned();
+    let to_restore: Vec<trash::TrashItem> = items.into_iter()
+        .filter(|item| item.original_path() == std::path::Path::new(&path))
+        .collect();
+    if to_restore.is_empty() {
+        status_label.set_text("File not found in trash");
+        return;
+    }
+    let original = std::path::PathBuf::from(&path);
+    let sl = status_label.clone();
+    let on_success = std::rc::Rc::new(std::cell::Cell::new(Some(on_success)));
+    let do_restore = move || {
+        match trash::os_limited::restore_all(to_restore) {
+            Ok(()) => {
+                sl.set_text(&format!("Restored: {}", path));
+                if let Some(cb) = on_success.take() {
+                    cb();
+                }
+            }
+            Err(e) => {
+                sl.set_text(&format!("Failed to restore: {}", e));
+            }
+        }
+    };
+    if original.exists() {
+        confirm_overwrite(
+            window,
+            "Overwrite existing file?",
+            &format!("{} already exists. Overwrite with the trashed version?", original.display()),
+            do_restore,
+        );
+    } else {
+        do_restore();
+    }
+}
+
+/// Restore a moved file from its current location back to the original path,
+/// asking for overwrite confirmation if the original path already exists.
+fn restore_moved_file<F>(
+    original_path: &str,
+    moved_to: &str,
+    window: &impl IsA<gtk4::Window>,
+    status_label: &gtk4::Label,
+    on_success: F,
+) where F: FnOnce() + 'static {
+    let original_path = original_path.to_owned();
+    let target = std::path::PathBuf::from(&original_path);
+    let moved_to = moved_to.to_owned();
+    let sl = status_label.clone();
+    let on_success = std::rc::Rc::new(std::cell::Cell::new(Some(on_success)));
+    let target_exists = target.exists();
+    let target_display = target.display().to_string();
+    let do_restore = move || {
+        if try_move_file(&moved_to, &target) {
+            sl.set_text(&format!("Restored to: {}", original_path));
+            if let Some(cb) = on_success.take() {
+                cb();
+            }
+        } else {
+            sl.set_text(&format!("Failed to restore: {}", moved_to));
+        }
+    };
+    if target_exists {
+        confirm_overwrite(
+            window,
+            "Overwrite existing file?",
+            &format!("{} already exists. Overwrite with the moved version?", target_display),
+            do_restore,
+        );
+    } else {
+        do_restore();
+    }
+}
+
 fn move_single_file_with_callback<F>(
     path: &str,
     status_label: &gtk4::Label,
     window: &impl IsA<gtk4::Window>,
     move_btn: &gtk4::Button,
     on_success: F,
-) where F: Fn(String) + 'static {
+) where F: FnOnce(String) + 'static {
     let dialog = gtk4::FileDialog::new();
     dialog.set_title("Select destination folder");
     let p = path.to_owned();
     let sl = status_label.clone();
     let w = window.clone();
     let mb = move_btn.clone();
-    dialog.select_folder(Some(&w), None::<&gtk4::gio::Cancellable>, move |result| {
+    let on_success = std::rc::Rc::new(std::cell::Cell::new(Some(on_success)));
+    dialog.select_folder(Some(&w.clone()), None::<&gtk4::gio::Cancellable>, move |result| {
         if let Ok(file) = result {
             if let Some(dest) = file.path() {
                 let src = std::path::Path::new(&p);
                 let target = dest.join(src.file_name().unwrap_or_default());
-                if std::fs::rename(&p, &target).is_ok()
-                    || (std::fs::copy(&p, &target).is_ok() && std::fs::remove_file(&p).is_ok())
-                {
-                    let dest_str = target.display().to_string();
-                    sl.set_text(&format!("→ Moved to {}", dest_str));
-                    mb.set_visible(false);
-                    on_success(dest_str);
+                let do_move = {
+                    let p = p.clone();
+                    let sl = sl.clone();
+                    let mb = mb.clone();
+                    let on_success = on_success.clone();
+                    move |target: std::path::PathBuf| {
+                        if try_move_file(&p, &target) {
+                            let dest_str = target.display().to_string();
+                            sl.set_text(&format!("→ Moved to {}", dest_str));
+                            mb.set_visible(false);
+                            if let Some(cb) = on_success.take() {
+                                cb(dest_str);
+                            }
+                        } else {
+                            sl.set_text(&format!("Failed to move: {}", p));
+                        }
+                    }
+                };
+                if target.exists() {
+                    confirm_overwrite(
+                        &w,
+                        "Overwrite existing file?",
+                        &format!("{} already exists. Overwrite?", target.display()),
+                        move || do_move(target),
+                    );
                 } else {
-                    sl.set_text(&format!("Failed to move: {}", p));
+                    do_move(target);
                 }
             }
         }
@@ -2520,7 +2766,7 @@ fn show_group_preview(
     main_box.set_margin_end(12);
 
     let n = entries.len();
-    let total_groups = results_data.lock().unwrap().len();
+    let total_groups = results_data.lock_unpoisoned().len();
     window.set_title(Some(&format!("ImpHash — Group #{} of {} Preview", group_number, total_groups)));
 
     let nav_bar = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
@@ -2548,7 +2794,7 @@ fn show_group_preview(
         prev_btn.connect_clicked(move |_| {
             let target = group_number - 1;
             let entries: Vec<(String, bool)> = {
-                let data = rd.lock().unwrap();
+                let data = rd.lock_unpoisoned();
                 match data.get(target - 1) {
                     Some(gd) => gd.files.iter()
                         .map(|fd| (fd.path.clone(), fd.reference))
@@ -2568,7 +2814,7 @@ fn show_group_preview(
         next_btn.connect_clicked(move |_| {
             let target = group_number + 1;
             let entries: Vec<(String, bool)> = {
-                let data = rd.lock().unwrap();
+                let data = rd.lock_unpoisoned();
                 match data.get(target - 1) {
                     Some(gd) => gd.files.iter()
                         .map(|fd| (fd.path.clone(), fd.reference))
@@ -2928,56 +3174,47 @@ fn show_group_preview(
         let zoom_btn_restore = zoom_btn.clone();
         let moved_to_lbl_restore = moved_to_label.clone();
         let shared_deleted_restore = shared_deleted.clone();
+        let win_restore = window.clone();
         restore_btn.connect_clicked(move |_| {
-            let items = match trash::os_limited::list() {
-                Ok(items) => items,
-                Err(e) => {
-                    sl_restore.set_text(&format!("Failed to list trash: {}", e));
-                    return;
-                }
-            };
             let rp = path_for_restore.clone();
-            let to_restore: Vec<trash::TrashItem> = items.into_iter()
-                .filter(|item| item.original_path() == std::path::Path::new(&rp))
-                .collect();
-            if to_restore.is_empty() {
-                sl_restore.set_text("File not found in trash");
-                return;
-            }
-            match trash::os_limited::restore_all(to_restore) {
-                Ok(()) => {
-                    shared_deleted_restore.borrow_mut().remove(&rp);
-                    sl_restore.set_text(&format!("Restored: {}", rp));
-                    // Reload thumbnail (may not have been loaded if file was trashed)
-                    if let Some(pixbuf) = load_pixbuf_scaled(&rp, 1200) {
-                        pic_restore.set_paintable(Some(&gtk4::gdk::Texture::for_pixbuf(&pixbuf)));
-                    }
-                    // Switch back to thumbnail
-                    pic_restore.set_visible(true);
-                    icon_restore.set_icon_name(Some(""));
-                    overlay_lbl_restore.set_text("");
-                    moved_to_lbl_restore.set_visible(false);
-                    overlay_restore.set_visible(false);
-                    restore_btn_ref.set_visible(false);
-                    trash_btn_restore.set_visible(true);
-                    zoom_btn_restore.set_sensitive(true);
-                    // Update main window
-                    if let Some(w) = mw_restore.get(&rp) {
-                        w.deleted_label.set_visible(false);
-                        w.trash_btn.set_visible(true);
-                        w.move_btn.set_visible(true);
-                        w.restore_btn.set_visible(false);
-                        if w.reference {
-                            w.row.set_css_classes(&["result-row", "ref-row"]);
-                        } else {
-                            w.row.set_css_classes(&["result-row"]);
-                        }
+            let shared_deleted_restore = shared_deleted_restore.clone();
+            let pic_restore = pic_restore.clone();
+            let icon_restore = icon_restore.clone();
+            let overlay_lbl_restore = overlay_lbl_restore.clone();
+            let moved_to_lbl_restore = moved_to_lbl_restore.clone();
+            let overlay_restore = overlay_restore.clone();
+            let restore_btn_ref = restore_btn_ref.clone();
+            let trash_btn_restore = trash_btn_restore.clone();
+            let zoom_btn_restore = zoom_btn_restore.clone();
+            let mw_restore = mw_restore.clone();
+            restore_from_trash(&path_for_restore, &win_restore, &sl_restore, move || {
+                shared_deleted_restore.borrow_mut().remove(&rp);
+                // Reload thumbnail (may not have been loaded if file was trashed)
+                if let Some(pixbuf) = load_pixbuf_scaled(&rp, 1200) {
+                    pic_restore.set_paintable(Some(&gtk4::gdk::Texture::for_pixbuf(&pixbuf)));
+                }
+                // Switch back to thumbnail
+                pic_restore.set_visible(true);
+                icon_restore.set_icon_name(Some(""));
+                overlay_lbl_restore.set_text("");
+                moved_to_lbl_restore.set_visible(false);
+                overlay_restore.set_visible(false);
+                restore_btn_ref.set_visible(false);
+                trash_btn_restore.set_visible(true);
+                zoom_btn_restore.set_sensitive(true);
+                // Update main window
+                if let Some(w) = mw_restore.get(&rp) {
+                    w.deleted_label.set_visible(false);
+                    w.trash_btn.set_visible(true);
+                    w.move_btn.set_visible(true);
+                    w.restore_btn.set_visible(false);
+                    if w.reference {
+                        w.row.set_css_classes(&["result-row", "ref-row"]);
+                    } else {
+                        w.row.set_css_classes(&["result-row"]);
                     }
                 }
-                Err(e) => {
-                    sl_restore.set_text(&format!("Failed to restore: {}", e));
-                }
-            }
+            });
         });
 
         let rmb_path = path.clone();
@@ -2992,6 +3229,7 @@ fn show_group_preview(
         let rmb_mw = main_widgets.clone();
         let rmb_sl = status_label.clone();
         let rmb_self = restore_move_btn.clone();
+        let rmb_window = window.clone();
         restore_move_btn.connect_clicked(move |_| {
             let dest = rmb_moved_to.text().to_string();
             if dest.is_empty() {
@@ -2999,16 +3237,24 @@ fn show_group_preview(
                 return;
             }
             let target = std::path::Path::new(&rmb_path);
-            if target.parent().map_or(false, |p| !p.exists()) {
+            if target.parent().is_some_and(|p| !p.exists()) {
                 rmb_sl.set_text("Original directory no longer exists");
                 return;
             }
-            if std::fs::rename(&dest, &rmb_path).is_ok()
-                || (std::fs::copy(&dest, &rmb_path).is_ok() && std::fs::remove_file(&dest).is_ok())
-            {
-                rmb_sl.set_text(&format!("Restored to: {}", rmb_path));
+            let rmb_pic = rmb_pic.clone();
+            let rmb_icon = rmb_icon.clone();
+            let rmb_overlay_lbl = rmb_overlay_lbl.clone();
+            let rmb_mtl = rmb_mtl.clone();
+            let rmb_overlay = rmb_overlay.clone();
+            let rmb_pl = rmb_pl.clone();
+            let rmb_self = rmb_self.clone();
+            let rmb_move_btn = rmb_move_btn.clone();
+            let rmb_mw = rmb_mw.clone();
+            let rmb_sl = rmb_sl.clone();
+            let rmb_path_inner = rmb_path.clone();
+            restore_moved_file(&rmb_path, &dest, &rmb_window, &rmb_sl, move || {
                 // Reload thumbnail (may not have been loaded if file was moved)
-                if let Some(pixbuf) = load_pixbuf_scaled(&rmb_path, 1200) {
+                if let Some(pixbuf) = load_pixbuf_scaled(&rmb_path_inner, 1200) {
                     rmb_pic.set_paintable(Some(&gtk4::gdk::Texture::for_pixbuf(&pixbuf)));
                 }
                 // Switch back to thumbnail
@@ -3017,11 +3263,11 @@ fn show_group_preview(
                 rmb_overlay_lbl.set_text("");
                 rmb_mtl.set_visible(false);
                 rmb_overlay.set_visible(false);
-                rmb_pl.set_text(&rmb_path);
+                rmb_pl.set_text(&rmb_path_inner);
                 rmb_self.set_visible(false);
                 rmb_move_btn.set_visible(true);
                 // Update main window
-                if let Some(w) = rmb_mw.get(&rmb_path) {
+                if let Some(w) = rmb_mw.get(&rmb_path_inner) {
                     w.moved_label.set_visible(false);
                     w.move_btn.set_visible(true);
                     w.restore_move_btn.set_visible(false);
@@ -3031,9 +3277,7 @@ fn show_group_preview(
                         w.row.set_css_classes(&["result-row"]);
                     }
                 }
-            } else {
-                rmb_sl.set_text(&format!("Failed to restore: {}", dest));
-            }
+            });
         });
 
         // Wire up zoom_btn now that trash_btn, restore_btn are in scope
@@ -3060,7 +3304,7 @@ fn show_group_preview(
                             if shared_deleted_for_zoom.borrow().contains(p.as_str()) {
                                 return false;
                             }
-                            mw_zoom.get(p).map_or(true, |mw| {
+                            mw_zoom.get(p).is_none_or(|mw| {
                                 !mw.deleted_label.is_visible() && !mw.moved_label.is_visible()
                             })
                         };
@@ -3092,7 +3336,7 @@ fn show_group_preview(
                             shared_deleted_for_zoom.clone(),
                             move |trashed_path| {
                                 // Sync group-preview overlay for the trashed entry
-                                let pw_map = ot_pw2.lock().unwrap();
+                                let pw_map = ot_pw2.lock_unpoisoned();
                                 let tp = trashed_path.clone();
                                 let (pic, ic, lb, ov, tb, rb, zb) =
                                     if let Some(pw) = pw_map.get(&tp) {
@@ -3151,7 +3395,7 @@ fn show_group_preview(
 
         let pw_reg = preview_widgets.clone();
         let path_reg = path.clone();
-        pw_reg.lock().unwrap().insert(path_reg, PreviewFileWidgets {
+        pw_reg.lock_unpoisoned().insert(path_reg, PreviewFileWidgets {
             picture: picture.clone(),
             status_overlay_box: status_overlay_box.clone(),
             status_icon: status_icon.clone(),
@@ -3267,7 +3511,7 @@ fn show_group_preview(
     // Take the monitors Rc out on first close, dropping all FileMonitors.
     window.connect_close_request(move |_| {
         drop(monitors_holder.take());
-        let mut map = pw_cleanup.lock().unwrap();
+        let mut map = pw_cleanup.lock_unpoisoned();
         for p in &preview_paths {
             map.remove(p);
         }
@@ -3281,7 +3525,7 @@ fn show_group_preview(
     let mw_focus = main_widgets.clone();
     let shared_del_focus = shared_deleted.clone();
     window.connect_is_active_notify(move |_win| {
-        let map = pw_focus.lock().unwrap();
+        let map = pw_focus.lock_unpoisoned();
         for path in &focus_paths {
             let exists = std::path::Path::new(path).exists();
             if !exists {
