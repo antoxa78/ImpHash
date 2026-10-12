@@ -39,6 +39,16 @@ cargo run --release
 3. Click **Scan**
 4. Review duplicate groups, select files, and Move or Trash
 
+## Support
+
+Enjoying this project? A small donation is greatly appreciated and helps keep it going:
+
+<p align="center">
+  <a href="https://www.paypal.me/antoxab1978" target="_blank">
+    <img src="https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif" alt="Donate with PayPal" />
+  </a>
+</p>
+
 ## License
 
 MIT
